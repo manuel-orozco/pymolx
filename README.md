@@ -2,7 +2,7 @@
 
 <img src="./data/pymol/icons/icon2.svg" height="100" align="right" />
 
-# Open-Source PyMOL
+# PymolX
 
 [Open-source foundation](https://pymol.org/#opensource) of the user-sponsored PyMOL molecular visualization system.
 
