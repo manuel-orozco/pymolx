@@ -102,22 +102,56 @@ just a flag change.
 | B-02 | [ ] | Version-dependent test expectations (`incentive: 1.8.4, open-source: 2.1`) | [testing/tests/api/querying.py:641](testing/tests/api/querying.py#L641) | Check that the pymolx version string doesn't break `requires_version` gating |
 | B-03 | [ ] | `bg_image_filename` embedded as a `data:` URL when saving sessions | [testing/tests/jira/PYMOL-1571.py](testing/tests/jira/PYMOL-1571.py) | Embed the image on session save, decode it on load. Needs a GUI test run |
 | B-04 | [ ] | `undo` after `remove` on discrete objects | [testing/tests/jira/PYMOL-1697.py](testing/tests/jira/PYMOL-1697.py) | Run the test with `--with-undo` first; it may already pass |
+| B-05 | [x] | Multi-level undo/redo with Incentive's API (`undo_enable`, `undo_disable`, `undo`, `redo`, capability `multi_undo`). Session snapshots; one step per top-level command, per event-loop turn in the GUI; camera kept on undo. On by default in the GUI | [modules/pymolx/undo.py](modules/pymolx/undo.py) | The upstream undo tests ([testing/tests/undo/](testing/tests/undo/)) now run: 26 of 28 pass, the 2 others need `clean` (P-01) |
 
 ---
 
-## F. Look and feel (check side by side before starting)
+## F. Look and feel
 
-These items are not marked in the code. Compare a running Incentive
-build with pymolx and record screenshots under `docs/parity/` before
-starting each one.
+These items are not marked in the code. We don't have access to
+Incentive PyMOL, so the references are two annotated screenshots of the
+Incentive PyMOL 3 main window from Schrödinger's documentation (dark
+theme): a ligand-binding-site scene, and a session with the Scenes panel
+and Timeline open. They are not committed here, as the images are
+Schrödinger's. What they show:
+
+- **Toolbar** under the menu: selection mode dropdown (pointer icon,
+  "Residues", accent color), undo, redo, Zoom dropdown, Orient, Rock,
+  Presets...; right-aligned: Builder..., Scenes, Draw/Ray dropdown
+  (camera icon), `...` overflow.
+- **Menu bar**: File, Edit, Build, Movie, Display, Setting, Scenes, Mouse,
+  Wizard, Plugin, Help.
+- **Content panel** (right of the viewer, called so in the docs): green
+  dot for enabled entries, disabled ones greyed with near-invisible
+  buttons, selections shown as `(name)`, rounded A/S/H/L/C buttons; the
+  `All` row has purple A/S/H/L and a green C.
+- **Toggle toolbar** under the content panel: Mouse (mode dropdown,
+  "3-Button Viewing"), Wizard (wand), Sequence (`SEQ`), Timeline, Command
+  (`>_`).
+- **Command line** at the very bottom, full width, prompt `PyMOL >`; the
+  output pane above it is toggled by `>_`; echoed commands in the accent
+  color. There is no command line inside the viewer.
+- **Scenes panel** (left dock, opened by Scenes): scene thumbnails named
+  001, 002, ... each with a `...` menu; Save Scene and Add to Timeline
+  buttons.
+- **Timeline** (bottom dock, above the command line): composition tabs,
+  ADD TRACK, a Camera track with keyframes, transport controls, Loop,
+  time display, EDIT..., EXPORT COMP, SHOW INSPECTOR; a Timeline
+  Inspector with camera position and rotation.
+
+Anything not visible in the screenshot (menu contents, dialogs, light
+theme) is our choice and marked *unconfirmed*. More reference
+screenshots from Schrödinger's public docs would help most for: an open
+A/S/H/L/C menu, the selection mode and Draw/Ray dropdowns, the `...` and
+wand menus.
 
 | ID | Status | Item | Where to work | Effort |
 |---|---|---|---|---|
-| L-01 | [ ] | Application theme: Qt palette, stylesheet, fonts, spacing | [pymol_qt_gui.py](modules/pmg_qt/pymol_qt_gui.py), new `pymolx/theme.qss` | M |
-| L-02 | [ ] | Our own icon set for the toolbar and menus | `data/pymol/icons/` (extend with original artwork) | M |
-| L-03 | [ ] | Dock layout: command line, object panel, sequence viewer, scenes, movie panel; "Reset layout" action | [pymol_qt_gui.py](modules/pmg_qt/pymol_qt_gui.py), [scene_bin_gui.py](modules/pmg_qt/scene_bin_gui.py) | M |
+| L-01 | [x] | Application theme: dark Fusion palette plus stylesheet, purple accent. Colors are defined once in `COLORS` | [modules/pymolx/gui/theme.py](modules/pymolx/gui/theme.py), [data/pymolx/styles/dark.qss](data/pymolx/styles/dark.qss) | M |
+| L-02 | [~] | Our own icon set for the toolbar and menus. Done: pointer, undo, redo, camera, chevron | [data/pymolx/icons/](data/pymolx/icons/) | M |
+| L-03 | [~] | Dock layout. Done: output pane and command line moved to the bottom, full width. Open: sequence viewer, scenes and movie panels; "Reset layout" action | [pymol_qt_gui.py](modules/pmg_qt/pymol_qt_gui.py), [scene_bin_gui.py](modules/pmg_qt/scene_bin_gui.py) | M |
 | L-04 | [~] | Default settings at startup (shaders, AA, ray, cartoon, background), shipped as a startup module, not as `Setting.cpp` edits. **Mechanism done; `DEFAULTS` stays empty until values are confirmed side by side** | [modules/pymolx/defaults.py](modules/pymolx/defaults.py) | S |
-| L-05 | [ ] | Menu structure and wording matching Incentive (File / Edit / Build / Movie / Display / Setting / Scene / Wizard / Plugin / Help) | [modules/pymol/_gui.py](modules/pymol/_gui.py) | M |
+| L-05 | [~] | Menu structure and wording matching Incentive. Done: `Scene` renamed to `Scenes` (top-level names now match the screenshot). Open: menu contents (*unconfirmed*) | [modules/pymol/_gui.py](modules/pymol/_gui.py) | M |
 | L-06 | [ ] | Unified Preferences dialog to replace the raw list in [advanced_settings_gui.py](modules/pmg_qt/advanced_settings_gui.py) | new Qt dialog | M |
 | L-07 | [ ] | Sequence viewer polish (Qt widget instead of the OpenGL strip) | new Qt widget | L |
 | L-08 | [ ] | Welcome / start screen and recent-files list | new Qt widget | S |
@@ -125,6 +159,11 @@ starting each one.
 | L-10 | [ ] | Movie maker / timeline editing parity | [modules/pymol/movie.py](modules/pymol/movie.py), Qt panel | M |
 | L-11 | [ ] | Mutagenesis wizard: rotamer library and preview parity | `modules/pymol/wizard/mutagenesis.py` | M |
 | L-12 | [ ] | Go through the recent Incentive release notes and add any feature not listed here | this file | S |
+| L-13 | [x] | Toolbar replacing the upstream grid of quick buttons. *Unconfirmed:* Presets... is a dropdown applying to all objects (the ellipsis may mean a dialog in Incentive); Zoom menu (All, Selection, Center, Reset View) and `...` menu (Get View, Unpick, Deselect, Properties, Rebuild, Movie controls) contents are ours | [modules/pymolx/gui/toolbar.py](modules/pymolx/gui/toolbar.py) | M |
+| L-14 | [x] | Toggle toolbar: mouse mode dropdown (`pymol.menu.mouse_config`), Wizard menu, `SEQ` (`seq_view`), Timeline (open source's `movie_panel` until L-17 exists), `>_` output pane. The viewer's own command line is off (`internal_feedback=0`); typing in the viewer goes to the command line | [content_panel.py](modules/pymolx/gui/content_panel.py) | S |
+| L-15 | [~] | Content panel replacing the OpenGL object panel (`internal_gui=0`). Done: rows from the core's panel list (new `_cmd.get_panel_list`, [panel.py](modules/pymolx/panel.py)), enabled dot, click to enable/disable, right-click for actions, A/S/H/L/C menus dispatched per object type as in the OpenGL panel, groups with expand/collapse, long names shortened with "...", menu labels in PyMOL's colors, a wizard panel (controls of the active wizard, e.g. mutagenesis) and a state bar (state stepping, rotamer strain). Open: drag to reorder, rename, multi-select | [content_panel.py](modules/pymolx/gui/content_panel.py), [layer3/Executive.cpp](layer3/Executive.cpp) | L |
+| L-16 | [ ] | Scenes panel: left dock with scene thumbnails, a `...` menu per scene, Save Scene, Add to Timeline (upstream has a Qt scene panel in [scene_bin_gui.py](modules/pmg_qt/scene_bin_gui.py) to build on) | new Qt dock | M |
+| L-17 | [ ] | Timeline: compositions, tracks (camera, objects), keyframes, transport, export, inspector. Large; open source only has the OpenGL movie panel | new Qt dock | L |
 
 ## G. Bundled dependencies and packaging
 

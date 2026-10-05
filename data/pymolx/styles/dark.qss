@@ -1,0 +1,487 @@
+/*
+ * pymolx dark theme (parity item L-01).
+ * "$$name" tokens are colors from modules/pymolx/gui/theme.py,
+ * "$$icons" is the pymolx icon directory
+ */
+
+QMainWindow, QDialog, QDockWidget
+{
+    background:     $window;
+    color:          $text;
+}
+
+/* menus */
+
+QMenuBar
+{
+    background:     $window;
+    color:          $text;
+    border-bottom:  1px solid $border;
+}
+
+QMenuBar::item
+{
+    padding:        3px 8px;
+    background:     transparent;
+}
+
+QMenuBar::item:selected, QMenuBar::item:pressed
+{
+    background:     $hover;
+    border-radius:  3px;
+}
+
+QMenu
+{
+    background:     $panel;
+    color:          $text;
+    border:         1px solid $border;
+    padding:        4px 0px;
+}
+
+QMenu::item
+{
+    padding:        4px 24px 4px 20px;
+}
+
+QMenu::item:selected
+{
+    background:     $selection;
+}
+
+QMenu::item:disabled
+{
+    color:          $text_dim;
+}
+
+/* menus from pymol.menu: menus.PyMenu draws the (colored) item text */
+QMenu#pymol_menu::item,
+QMenu#pymol_menu::item:selected,
+QMenu#pymol_menu::item:disabled
+{
+    color:          transparent;
+}
+
+QMenu::separator
+{
+    height:         1px;
+    background:     $border;
+    margin:         4px 8px;
+}
+
+/* toolbar */
+
+QToolBar#pymolx_toolbar
+{
+    background:     $window;
+    border:         none;
+    border-bottom:  1px solid $border;
+    padding:        2px 4px;
+    spacing:        2px;
+}
+
+QToolBar#pymolx_toolbar::separator
+{
+    background:     $border;
+    width:          1px;
+    margin:         4px 6px;
+}
+
+QToolBar#pymolx_toolbar QToolButton
+{
+    color:          $text;
+    background:     transparent;
+    border:         1px solid transparent;
+    border-radius:  4px;
+    padding:        3px 5px;
+    font-size:      12px;
+    font-weight:    600;
+}
+
+QToolBar#pymolx_toolbar QToolButton:hover
+{
+    background:     $hover;
+}
+
+QToolBar#pymolx_toolbar QToolButton:pressed,
+QToolBar#pymolx_toolbar QToolButton:checked
+{
+    background:     $hover;
+    border-color:   $accent;
+}
+
+QToolBar#pymolx_toolbar QToolButton[accent=true]
+{
+    color:          $accent_text;
+}
+
+/* dropdown (InstantPopup) and split (MenuButtonPopup) buttons */
+
+QToolBar#pymolx_toolbar QToolButton[dropdown=true]
+{
+    padding-right:  16px;
+}
+
+QToolBar#pymolx_toolbar QToolButton::menu-indicator
+{
+    image:          url($icons/chevron-down.svg);
+    width:          10px;
+    height:         10px;
+    subcontrol-origin: padding;
+    subcontrol-position: right center;
+    right:          3px;
+}
+
+QToolBar#pymolx_toolbar QToolButton::menu-button
+{
+    border:         none;
+    background:     transparent;
+    width:          14px;
+}
+
+QToolBar#pymolx_toolbar QToolButton::menu-arrow
+{
+    image:          url($icons/chevron-down.svg);
+    width:          10px;
+    height:         10px;
+}
+
+QToolBar#pymolx_toolbar QToolButton#more_button::menu-indicator
+{
+    image:          none;
+    width:          0px;
+}
+
+/* content panel (object rows) */
+
+QWidget#content_panel, QScrollArea#panel_scroll, QWidget#panel_rows
+{
+    background:     $window;
+    border:         none;
+}
+
+QWidget#content_panel
+{
+    border-left:    1px solid $border;
+}
+
+QFrame#panel_row
+{
+    border-bottom:  1px solid $panel;
+}
+
+QFrame#panel_row:hover
+{
+    background:     $hover;
+}
+
+QFrame#panel_row QLabel#panel_dot
+{
+    color:          $text_dim;
+    font-size:      9px;
+}
+
+QFrame#panel_row[enabled_item=true] QLabel#panel_dot
+{
+    color:          $enabled;
+}
+
+QFrame#panel_row QLabel#panel_name
+{
+    color:          $text_dim;
+    font-size:      13px;
+}
+
+QFrame#panel_row[enabled_item=true] QLabel#panel_name
+{
+    color:          $text;
+    font-size:      13px;
+    font-weight:    bold;
+}
+
+QFrame#panel_row QToolButton#ashlc
+{
+    background:     transparent;
+    color:          $border;
+    border:         1px solid transparent;
+    border-radius:  3px;
+    min-width:      20px;
+    max-width:      20px;
+    min-height:     20px;
+    max-height:     20px;
+    padding:        0px;
+    font-size:      11px;
+    font-weight:    bold;
+}
+
+QFrame#panel_row[enabled_item=true] QToolButton#ashlc
+{
+    background:     $button;
+    color:          $text;
+}
+
+QFrame#panel_row[all_row=true] QToolButton#ashlc
+{
+    background:     $accent;
+    color:          $text;
+}
+
+QFrame#panel_row[all_row=true] QToolButton#ashlc[column="C"]
+{
+    background:     $enabled;
+}
+
+QFrame#panel_row QToolButton#ashlc:hover
+{
+    border-color:   $text_dim;
+    color:          $text;
+}
+
+QFrame#panel_row QToolButton#ashlc::menu-indicator
+{
+    image:          none;
+    width:          0px;
+}
+
+QFrame#panel_row QToolButton#group_arrow
+{
+    background:     transparent;
+    color:          $text_dim;
+    border:         none;
+    padding:        0px;
+}
+
+/* wizard panel and state bar (content panel, above the toggles) */
+
+QFrame#wizard_panel
+{
+    background:     $panel;
+    border-top:     1px solid $border;
+}
+
+QLabel#wizard_title
+{
+    background:     $selection;
+    color:          $text;
+    font-weight:    bold;
+    padding:        3px 6px;
+    border-radius:  3px;
+}
+
+QPushButton#wizard_button
+{
+    padding:        3px 10px;
+}
+
+QToolButton#wizard_menu
+{
+    background:     $panel;
+    color:          $text;
+    border:         1px solid $border;
+    border-radius:  3px;
+    padding:        3px 20px;
+}
+
+QToolButton#wizard_menu:hover
+{
+    background:     $hover;
+}
+
+QToolButton#wizard_menu::menu-indicator
+{
+    image:          url($icons/chevron-down.svg);
+    width:          10px;
+    height:         10px;
+    subcontrol-origin: padding;
+    subcontrol-position: right center;
+    right:          6px;
+}
+
+QFrame#state_bar
+{
+    background:     $window;
+    border-top:     1px solid $border;
+}
+
+QFrame#state_bar QToolButton#state_button
+{
+    color:          $text;
+    background:     transparent;
+    border:         1px solid transparent;
+    border-radius:  3px;
+    min-width:      20px;
+    padding:        1px 2px;
+}
+
+QFrame#state_bar QToolButton#state_button:hover
+{
+    background:     $hover;
+}
+
+QFrame#state_bar QToolButton#state_button:checked
+{
+    border-color:   $accent;
+}
+
+QLabel#state_label
+{
+    color:          $text_dim;
+    padding-left:   6px;
+    font-size:      12px;
+}
+
+/* toggle toolbar (bottom of the content panel) */
+
+QToolBar#pymolx_toggles
+{
+    background:     $window;
+    border:         none;
+    border-top:     1px solid $border;
+    padding:        2px;
+    spacing:        2px;
+}
+
+QToolBar#pymolx_toggles QToolButton
+{
+    color:          $text;
+    background:     transparent;
+    border:         1px solid transparent;
+    border-radius:  4px;
+    padding:        2px 4px;
+    font-size:      12px;
+    font-weight:    600;
+}
+
+QToolBar#pymolx_toggles QToolButton:hover
+{
+    background:     $hover;
+}
+
+QToolBar#pymolx_toggles QToolButton:checked
+{
+    border-color:   $accent;
+}
+
+QToolBar#pymolx_toggles QToolButton[dropdown=true]
+{
+    padding-right:  16px;
+    text-align:     left;
+}
+
+QToolBar#pymolx_toggles QToolButton::menu-indicator
+{
+    image:          url($icons/chevron-up.svg);
+    width:          10px;
+    height:         10px;
+    subcontrol-origin: padding;
+    subcontrol-position: right center;
+    right:          3px;
+}
+
+/* output and command line */
+
+QFrame#extgui
+{
+    background:     $base;
+    border-top:     1px solid $border;
+}
+
+QPlainTextEdit#feedback_browser
+{
+    background:     $base;
+    color:          $text;
+    border:         none;
+    selection-background-color: $selection;
+}
+
+QLabel#command_label
+{
+    color:          $accent_text;
+    font-weight:    bold;
+    padding-left:   4px;
+}
+
+QLineEdit#command_line
+{
+    background:     $panel;
+    color:          $text;
+    border:         1px solid $border;
+    border-radius:  3px;
+    padding:        2px 4px;
+    selection-background-color: $selection;
+}
+
+QLineEdit#command_line:focus
+{
+    border-color:   $accent;
+}
+
+/* generic widgets */
+
+QPushButton
+{
+    background:     $panel;
+    color:          $text;
+    border:         1px solid $border;
+    border-radius:  3px;
+    padding:        3px 10px;
+}
+
+QPushButton:hover
+{
+    background:     $hover;
+}
+
+QPushButton:pressed, QPushButton:checked
+{
+    border-color:   $accent;
+}
+
+QPushButton:disabled
+{
+    color:          $text_dim;
+}
+
+QToolTip
+{
+    background:     $panel;
+    color:          $text;
+    border:         1px solid $border;
+}
+
+QScrollBar:vertical
+{
+    background:     $base;
+    width:          10px;
+    margin:         0px;
+}
+
+QScrollBar::handle:vertical
+{
+    background:     $border;
+    border-radius:  4px;
+    min-height:     24px;
+}
+
+QScrollBar:horizontal
+{
+    background:     $base;
+    height:         10px;
+    margin:         0px;
+}
+
+QScrollBar::handle:horizontal
+{
+    background:     $border;
+    border-radius:  4px;
+    min-width:      24px;
+}
+
+QScrollBar::add-line, QScrollBar::sub-line
+{
+    width:          0px;
+    height:         0px;
+}
+
+/* vi:ft=css:expandtab:sw=4
+ */

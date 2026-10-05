@@ -2386,6 +2386,29 @@ static PyObject *CmdGetNames(PyObject * self, PyObject * args)
   return APIResult(G, res);
 }
 
+/**
+ * pymolx: object panel rows as a list of
+ * (name, type, enabled, nest_level, is_group, is_open) tuples
+ */
+static PyObject* CmdGetPanelList(PyObject* self, PyObject* args)
+{
+  PyMOLGlobals* G = nullptr;
+  API_SETUP_ARGS(G, self, args, "O", &self);
+  APIEnter(G);
+  auto items = ExecutiveGetPanelList(G);
+  APIExit(G);
+
+  PyObject* result = PyList_New(items.size());
+  for (size_t i = 0; i < items.size(); ++i) {
+    auto const& item = items[i];
+    PyList_SET_ITEM(result, i,
+        Py_BuildValue("(ssiIii)", item.name.c_str(), item.type.c_str(),
+            int(item.enabled), item.nest_level, int(item.is_group),
+            int(item.is_open)));
+  }
+  return result;
+}
+
 static PyObject *CmdInterrupt(PyObject * self, PyObject * args)
 {
   PyMOLGlobals *G = nullptr;
@@ -6476,6 +6499,7 @@ static PyMethodDef Cmd_methods[] = {
   {"get_movie_locked", CmdGetMovieLocked, METH_VARARGS},
   {"get_movie_playing", CmdGetMoviePlaying, METH_VARARGS},
   {"get_names", CmdGetNames, METH_VARARGS},
+  {"get_panel_list", CmdGetPanelList, METH_VARARGS},
   {"get_object_color_index", CmdGetObjectColorIndex, METH_VARARGS},
   {"get_object_matrix", CmdGetObjectMatrix, METH_VARARGS},
   {"get_object_ttt", CmdGetObjectTTT, METH_VARARGS},

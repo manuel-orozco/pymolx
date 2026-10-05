@@ -344,8 +344,8 @@ def adapt_to_hardware(self):
     except:
         pass
 
-    import pymolx.defaults
-    pymolx.defaults.apply(cmd)
+    import pymolx
+    pymolx._started(cmd)
 
     # store our adapted state as default
     cmd.reinitialize("store")

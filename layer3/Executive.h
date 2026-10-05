@@ -532,6 +532,20 @@ pymol::Result<std::vector<const char*>> ExecutiveGetNames(
 bool ExecutiveIsMoleculeOrSelection(PyMOLGlobals* G, const char* name);
 pymol::Result<char const*> ExecutiveGetType(PyMOLGlobals* G, const char* name);
 
+/**
+ * pymolx: one row of the object panel (see ExecutiveGetPanelList)
+ */
+struct ExecutivePanelItem {
+  std::string name;
+  std::string type; // "all", "selection", or "object:..." like get_type
+  bool enabled;
+  unsigned nest_level;
+  bool is_group;
+  bool is_open;
+};
+
+std::vector<ExecutivePanelItem> ExecutiveGetPanelList(PyMOLGlobals* G);
+
 pymol::Result<float> ExecutiveGetArea(
     PyMOLGlobals*, const char* sele, int state, bool load_b);
 

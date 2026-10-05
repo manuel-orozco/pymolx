@@ -774,7 +774,7 @@ class PyMOLDesktopGUI(object):
                 ('check', 'Show Text (Esc)', 'text'),
                 ('check', 'Overlay Text', 'overlay'),
             ]),
-            ('menu', 'Scene', [
+            ('menu', 'Scenes', [
                 ('command', 'Scenes...', self.scene_panel_menu_dialog),
                 ('separator',),
                 ('command', 'Next [PgDn]', lambda: cmd.scene('', 'next')),

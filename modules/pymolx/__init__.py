@@ -19,5 +19,14 @@ def _init(_self):
     Called once from pymol/__init__.py after the "cmd" module is set up.
     Feature modules which replace Incentive-only stubs get imported here.
     '''
-    from . import info
+    from . import info, undo
     info.extend(_self)
+    undo.install(_self)
+
+
+def _started(_self):
+    '''
+    Called once from pymol.adapt_to_hardware(), when the PyMOL instance
+    (including its command parser) is set up and before pymolrc files run.
+    '''
+    defaults.apply(_self)

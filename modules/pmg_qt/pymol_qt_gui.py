@@ -11,6 +11,10 @@ import sys
 import pymol
 import pymol._gui
 import pymolx.branding
+import pymolx.gui.content_panel
+import pymolx.gui.theme
+import pymolx.gui.toolbar
+import pymolx.undo
 from pymol import colorprinting, save_shortcut
 
 from pymol.Qt import QtGui, QtCore, QtWidgets
@@ -140,7 +144,7 @@ class PyMOLQtGUI(QtWidgets.QMainWindow, pymol._gui.PyMOLDesktopGUI):
         connectFontContextMenu(self.browser)
 
         lineeditlayout = QtWidgets.QHBoxLayout()
-        command_label = QtWidgets.QLabel("PyMOL>")
+        command_label = QtWidgets.QLabel("PyMOL >")
         command_label.setObjectName("command_label")
         lineeditlayout.addWidget(command_label)
         lineeditlayout.addWidget(self.lineedit)
@@ -162,13 +166,9 @@ PyMOL> color ye<TAB>    (will autocomplete "yellow")
         layout.addWidget(self.browser)
         layout.addLayout(lineeditlayout)
 
-        quickbuttonslayout = QtWidgets.QVBoxLayout()
-        quickbuttonslayout.setSpacing(2)
-
         extguilayout = QtWidgets.QBoxLayout(QtWidgets.QBoxLayout.Direction.LeftToRight)
         extguilayout.setContentsMargins(2, 2, 2, 2)
         extguilayout.addLayout(layout)
-        extguilayout.addLayout(quickbuttonslayout)
 
         class ExtGuiFrame(QtWidgets.QFrame):
             def mouseDoubleClickEvent(_, event):
@@ -192,18 +192,8 @@ PyMOL> color ye<TAB>    (will autocomplete "yellow")
         else:
             dockWidget.hide()
 
-        self.addDockWidget(Qt.DockWidgetArea.TopDockWidgetArea, dockWidget)
-
-        # rearrange vertically if docking left or right
-        @dockWidget.dockLocationChanged.connect
-        def _(area):
-            if area == Qt.DockWidgetArea.LeftDockWidgetArea or area == Qt.DockWidgetArea.RightDockWidgetArea:
-                extguilayout.setDirection(QtWidgets.QBoxLayout.Direction.BottomToTop)
-                quickbuttonslayout.takeAt(quickbuttons_stretch_index)
-            else:
-                extguilayout.setDirection(QtWidgets.QBoxLayout.Direction.LeftToRight)
-                if quickbuttons_stretch_index >= quickbuttonslayout.count():
-                    quickbuttonslayout.addStretch()
+        # pymolx: output and command line below the viewer
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, dockWidget)
 
         # OpenGL Widget
         self.pymolwidget = PyMOLGLWidget(self)
@@ -221,72 +211,16 @@ PyMOL> color ye<TAB>    (will autocomplete "yellow")
         self.lineedit.installEventFilter(self)
         self.pymolwidget.installEventFilter(self)
 
-        # Quick Buttons
-        for row in [
-            [
-                ('Reset', cmd.reset),
-                ('Zoom', lambda: cmd.zoom(animate=1.0)),
-                ('Orient', lambda: cmd.orient(animate=1.0)),
-
-                # render dialog will be constructed when the menu is shown
-                # for the first time. This way it's populated with the current
-                # viewport and settings. Also defers parsing of the ui file.
-                ('Draw/Ray', WidgetMenu(self).setSetupUi(self.render_dialog)),
-            ],
-            [
-                ('Unpick', cmd.unpick),
-                ('Deselect', cmd.deselect),
-                ('Rock', cmd.rock),
-                ('Get View', self.get_view),
-            ],
-            [
-                ('|<', cmd.rewind),
-                ('<', cmd.backward),
-                ('Stop', cmd.mstop),
-                ('Play', cmd.mplay),
-                ('>', cmd.forward),
-                ('>|', cmd.ending),
-                ('MClear', cmd.mclear),
-            ],
-            [
-                ('Builder', self.open_builder_panel),
-                ('Properties', self.open_props_dialog),
-                ('Rebuild', cmd.rebuild),
-            ],
-        ]:
-            hbox = QtWidgets.QHBoxLayout()
-            hbox.setSpacing(2)
-
-            for name, callback in row:
-                btn = QtWidgets.QPushButton(name)
-                btn.setProperty("quickbutton", True)
-                btn.setAttribute(Qt.WidgetAttribute.WA_LayoutUsesWidgetRect) # OS X workaround
-                hbox.addWidget(btn)
-
-                if callback is None:
-                    btn.setEnabled(False)
-                elif isinstance(callback, QtWidgets.QMenu):
-                    btn.setMenu(callback)
-                else:
-                    btn.released.connect(callback)
-
-            quickbuttonslayout.addLayout(hbox)
-
-        # progress bar
-        hbox = QtWidgets.QHBoxLayout()
+        # progress bar (next to the command line)
         self.progressbar = QtWidgets.QProgressBar()
         self.progressbar.setSizePolicy(
                 QtWidgets.QSizePolicy.Policy.Minimum,
                 QtWidgets.QSizePolicy.Policy.Minimum)
-        hbox.addWidget(self.progressbar)
+        lineeditlayout.addWidget(self.progressbar)
         self.abortbutton = QtWidgets.QPushButton('Abort')
         self.abortbutton.setStyleSheet("background: #FF0000; color: #FFFFFF")
         self.abortbutton.released.connect(cmd.interrupt)
-        hbox.addWidget(self.abortbutton)
-        quickbuttonslayout.addLayout(hbox)
-
-        quickbuttonslayout.addStretch()
-        quickbuttons_stretch_index = quickbuttonslayout.count() - 1
+        lineeditlayout.addWidget(self.abortbutton)
 
         # menu top level
         self.menubar = menubar = self.menuBar()
@@ -375,6 +309,14 @@ PyMOL> color ye<TAB>    (will autocomplete "yellow")
                             fname if len(fname) < 128 else '...' + fname[-120:],
                             lambda fname=fname: self.load_dialog(fname))
 
+        # pymolx: toolbar replaces the upstream quick buttons
+        self.toolbar = pymolx.gui.toolbar.setup(self)
+        # pymolx: object panel and command prompt in Qt instead of OpenGL
+        self.content_panel = pymolx.gui.content_panel.setup(self)
+        # pymolx: multi-level undo, one step per event loop turn
+        pymolx.undo.enable_for_gui(
+            lambda close: QtCore.QTimer.singleShot(0, close))
+
         # some experimental window control
         menu = self.menudict['Display'].addSeparator()
         menu = self.menudict['Display'].addMenu('External GUI')
@@ -417,6 +359,11 @@ PyMOL> color ye<TAB>    (will autocomplete "yellow")
         if style:
             self.setStyleSheet(style)
 
+        try:
+            pymolx.gui.theme.apply(QtWidgets.QApplication.instance(), self, cmd)
+        except Exception as e:
+            print('pymolx: could not apply theme:', e)
+
         # Load saved shortcuts on launch
         self.saved_shortcuts = pymol.save_shortcut.load_and_set(self.cmd)
 
@@ -451,6 +398,9 @@ PyMOL> color ye<TAB>    (will autocomplete "yellow")
         elif type_ == QtCore.QEvent.Type.KeyPress:
             if watched is self.lineedit:
                 return self.lineeditKeyPressEventFilter(watched, event)
+            elif (watched is self.pymolwidget and pymolx.gui.content_panel
+                  .forward_key_to_command_line(self, event)):
+                return True
             elif event.key() == Qt.Key.Key_Tab:
                 self.keyPressEvent(event)
                 return True
@@ -938,7 +888,7 @@ PyMOL> color ye<TAB>    (will autocomplete "yellow")
 
         feedback = self.cmd._get_feedback()
         if feedback:
-            html = colorprinting.text2html('\n'.join(feedback))
+            html = pymolx.gui.theme.feedback_html('\n'.join(feedback))
             self.browser.appendHtml(html)
 
             scrollbar = self.browser.verticalScrollBar()

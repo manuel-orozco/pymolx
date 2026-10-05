@@ -9003,6 +9003,39 @@ pymol::Result<char const*> ExecutiveGetType(PyMOLGlobals* G, const char* name)
   }
 }
 
+/**
+ * pymolx: the rows of the object panel in display order, for GUIs which
+ * draw their own panel. Like the OpenGL panel, members of closed groups
+ * and hidden names (hide_underscore_names) are left out.
+ */
+std::vector<ExecutivePanelItem> ExecutiveGetPanelList(PyMOLGlobals* G)
+{
+  CExecutive* I = G->Executive;
+  ExecutiveUpdateGroups(G, false);
+  ExecutiveUpdatePanelList(G);
+
+  std::vector<ExecutivePanelItem> items;
+  items.reserve(I->Panel.size());
+  for (auto const& panelitem : I->Panel) {
+    SpecRec const* rec = panelitem.spec;
+    ExecutivePanelItem item;
+    if (rec->type == cExecObject) {
+      item.name = rec->obj->Name;
+      auto type = ExecutiveGetType(G, rec->obj->Name);
+      item.type = type ? type.result() : "object:";
+    } else {
+      item.name = rec->name;
+      item.type = (rec->type == cExecAll) ? "all" : "selection";
+    }
+    item.enabled = rec->visible;
+    item.nest_level = panelitem.nest_level;
+    item.is_group = panelitem.is_group;
+    item.is_open = panelitem.is_open;
+    items.push_back(std::move(item));
+  }
+  return items;
+}
+
 /*========================================================================*/
 pymol::Result<> ExecutiveUpdateCmd(PyMOLGlobals* G, const char* s0,
     const char* s1, int sta0, int sta1, int method, int quiet)
