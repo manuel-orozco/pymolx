@@ -1,6 +1,6 @@
 [![CI](https://github.com/schrodinger/pymol-open-source/workflows/CI/badge.svg)](https://github.com/schrodinger/pymol-open-source/actions)
 
-<img src="./data/pymol/icons/icon2.svg" height="100" align="right" />
+<img src="./data/pymolx/icons/pymolx_logo.jpeg" height="100" align="right" />
 
 # PymolX
 
