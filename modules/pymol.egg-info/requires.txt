@@ -1,0 +1,15 @@
+numpy>=2.0
+
+[dev]
+biopython>=1.80
+msgpack==1.0.8
+pillow==11.1.0
+PySide6==6.8.1
+pytest==8.2.2
+requests==2.32.3
+
+[science]
+biopython>=1.80
+gemmi>=0.6
+rdkit>=2024.3
+scipy>=1.11

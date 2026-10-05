@@ -116,6 +116,11 @@ else:
     run_all = False
     max_threads = int(cmd.get('max_threads'))
 
+    # pymolx: tests are written against upstream defaults
+    import pymolx
+    if pymolx.defaults.revert(cmd):
+        cmd.reinitialize('store')
+
     cmd.set('use_shaders')
     use_shaders = cmd.get_setting_boolean('use_shaders')
 
@@ -123,6 +128,50 @@ else:
 
     deferred_unlink = []
     deferred_rmtree = []
+
+    pymolx_parity = import_from_file(
+        os.path.join(pymol_test_dir, 'pymolx_parity.py'), 'pymolx_parity')
+
+    def _decorated_qualname(func, frame):
+        '''
+        Qualified name of a decorated test class or method. "frame" is the
+        module or class body which applies the decorator.
+        '''
+        qualname = getattr(func, '__qualname__', None)
+        if qualname is not None:
+            return qualname
+
+        # e.g. foreachList: take the name from the def/class statement
+        # which follows the decorator line
+        import linecache
+        import re
+        code = frame.f_code
+        for line in linecache.getlines(code.co_filename)[frame.f_lineno - 1:]:
+            m = re.match(r'\s*(?:async\s+)?(?:def|class)\s+(\w+)', line)
+            if m is not None:
+                break
+        else:
+            return None
+        outer = getattr(code, 'co_qualname', code.co_name)
+        if outer == '<module>':
+            return m.group(1)
+        return outer + '.' + m.group(1)
+
+    def pymolx_unlocked(func, frame):
+        '''
+        pymolx: True if an Incentive-only test should run because its
+        parity items are implemented (see pymolx_parity.py)
+        '''
+        qualname = _decorated_qualname(func, frame)
+        if qualname is None:
+            return False
+        try:
+            relpath = os.path.relpath(frame.f_code.co_filename,
+                                      os.path.join(pymol_test_dir, 'tests'))
+        except ValueError:
+            return False
+        test_id = relpath.replace(os.sep, '/') + '::' + qualname
+        return pymolx_parity.unlocked(test_id, pymolx.features.provides)
 
     class requires_version(object):
         '''
@@ -160,6 +209,8 @@ else:
             self.flags = flags
 
         def __call__(self, func):
+            # module or class body of the decorated test (for pymolx)
+            caller = sys._getframe(1)
 
             flags = dict.fromkeys(self.flags, True)
             flags_known = []
@@ -174,7 +225,8 @@ else:
             if hasflag('gui') and options.no_gui:
                 return unittest.skip('no gui')(func)
 
-            if hasflag('incentive') and not options.incentive_product:
+            if hasflag('incentive') and not options.incentive_product \
+                    and not pymolx_unlocked(func, caller):
                 return unittest.skip('no incentive')(func)
 
             if hasflag('no_edu') and PYMOL_EDU:

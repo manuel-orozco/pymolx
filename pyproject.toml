@@ -35,6 +35,13 @@ dev = [
   "pytest==8.2.2",
   "requests==2.32.3",
 ]
+# pymolx: libraries used by Incentive-parity features (see INCENTIVE_PARITY.md, D-03)
+science = [
+  "biopython>=1.80",
+  "gemmi>=0.6",
+  "rdkit>=2024.3",
+  "scipy>=1.11",
+]
 
 [project.urls]
 Homepage = "https://pymol.org"

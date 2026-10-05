@@ -6,6 +6,8 @@ import sys
 import os
 import webbrowser
 
+import pymolx.branding
+
 class PyMOLDesktopGUI(object):
     '''Superclass for PyMOL Desktop Applications'''
 
@@ -865,8 +867,10 @@ class PyMOLDesktopGUI(object):
             ]),
             ('menu', 'Plugin', []),
             ('menu', 'Help', [
-                ('command', 'PyMOL Home Page', lambda: webbrowser.open("http://www.pymol.org")),
-                ('command', 'PyMOL Product Page', lambda: webbrowser.open("https://www.schrodinger.com/platform/products/pymol/")),
+                ('command', 'pymolx Home Page', lambda: webbrowser.open(pymolx.branding.HOMEPAGE)),
+                ('command', 'Report a pymolx Issue', lambda: webbrowser.open(pymolx.branding.ISSUES_URL)),
+                ('separator',),
+                ('command', 'Open-Source PyMOL Home Page', lambda: webbrowser.open("http://www.pymol.org")),
                 ('command', 'PyMOL Community Wiki', lambda: webbrowser.open("http://www.pymolwiki.org")),
                 ('separator',),
                 ('command', 'PyMOL Command Reference', lambda: webbrowser.open('http://pymol.org/pymol-command-ref.html')),
@@ -882,8 +886,7 @@ class PyMOLDesktopGUI(object):
                 ('separator',),
                 ('command', 'PyMOL Mailing List', lambda: webbrowser.open("https://lists.sourceforge.net/lists/listinfo/pymol-users")),
                 ('separator',),
-                ('command', 'About PyMOL', self.show_about),
-                ('command', 'Sponsorship Information', lambda: webbrowser.open("http://pymol.org/funding.html")),
+                ('command', 'About ' + pymolx.branding.NAME, self.show_about),
                 ('command', 'How to Cite PyMOL', lambda: webbrowser.open("http://pymol.org/citing")),
             ]),
         ]

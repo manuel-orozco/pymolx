@@ -160,9 +160,8 @@ def get_version_message(v=None):
     if not v:
         v = _cmd.get_version()
 
-    p = "PyMOL %s " % v[0]
-    p += "Incentive Product" if invocation.options.incentive_product else \
-         "Open-Source"
+    import pymolx.branding
+    p = pymolx.branding.version_message(v[0])
 
     if v[4]:
         p += ' (' + v[4][:10] + ')'
@@ -344,6 +343,9 @@ def adapt_to_hardware(self):
                   print(" Enabled multithreaded rendering.")
     except:
         pass
+
+    import pymolx.defaults
+    pymolx.defaults.apply(cmd)
 
     # store our adapted state as default
     cmd.reinitialize("store")
@@ -568,6 +570,9 @@ try:
     import epymol
 except ImportError:
     pass
+
+import pymolx
+pymolx._init(cmd)
 
 ########## WORKAROUND TO PREVENT "import cmd" ##############################
 # Previous versions of PyMOL did relative imports and thus allowd

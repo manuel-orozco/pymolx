@@ -10,6 +10,7 @@ import sys
 
 import pymol
 import pymol._gui
+import pymolx.branding
 from pymol import colorprinting, save_shortcut
 
 from pymol.Qt import QtGui, QtCore, QtWidgets
@@ -112,7 +113,8 @@ class PyMOLQtGUI(QtWidgets.QMainWindow, pymol._gui.PyMOLDesktopGUI):
 
         # "session_file" setting in window title
         self.setting_callbacks[440].append(
-            lambda v: self.setWindowTitle("PyMOL (" + os.path.basename(v) + ")")
+            lambda v: self.setWindowTitle(
+                pymolx.branding.NAME + " (" + os.path.basename(v) + ")")
         )
 
         # "External" Command Line and Loggin Widget
@@ -897,23 +899,16 @@ PyMOL> color ye<TAB>    (will autocomplete "yellow")
         self.scene_panel_dialog.show()
 
     def show_about(self):
+        branding = pymolx.branding
         msg = [
-            'The PyMOL Molecular Graphics System\n',
-            'Version %s' % (self.cmd.get_version()[0]),
-            u'Copyright (C) Schr\xF6dinger, LLC.',
-            'All rights reserved.\n',
-            'License information:',
-        ]
-
-        msg.append('Open-Source Build')
-
-        msg += [
-            '',
+            branding.version_message(self.cmd.get_version()[0]) + '\n',
+            branding.DISCLAIMER + '\n',
+            branding.UPSTREAM_COPYRIGHT + '\n',
             'For more information:',
-            'https://pymol.org',
-            'sales@schrodinger.com',
+            branding.HOMEPAGE,
         ]
-        QtWidgets.QMessageBox.about(self, "About PyMOL", '\n'.join(msg))
+        QtWidgets.QMessageBox.about(self, "About " + branding.NAME,
+                                    '\n'.join(msg))
 
     #################
     # GUI callbacks
@@ -1215,16 +1210,16 @@ def execapp():
     if pymol.IS_WINDOWS:
         import ctypes
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
-                u'com.schrodinger.pymol')
+                pymolx.branding.APP_ID)
 
-    app = PyMOLApplication(['PyMOL'])
+    app = PyMOLApplication([pymolx.branding.NAME])
     app.setWindowIcon(make_pymol_qicon())
 
     window = PyMOLQtGUI()
-    window.setWindowTitle("PyMOL")
+    window.setWindowTitle(pymolx.branding.NAME)
 
     # fix gnome/wayland dash icon/missing wmclass
-    app.setDesktopFileName("org.pymol.PyMOL")
+    app.setDesktopFileName(pymolx.branding.APP_ID)
 
     @commandoverloaddecorator
     def viewport(w=-1, h=-1, _self=None):

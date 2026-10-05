@@ -2633,38 +2633,19 @@ void OrthoSplash(PyMOLGlobals* G)
 
   /* END PROPRIETARY CODE SEGMENT */
   {
-    /* Splash message for unrestricted access open-source versions... */
-    PRINTF " PyMOL(TM) Molecular Graphics System, Version " ENDF(G);
+    /* Splash message for pymolx (keep in sync with modules/pymolx/branding.py).
+     * The upstream copyright notice must be kept (see LICENSE). */
+    PRINTF " pymolx - based on Open-Source PyMOL(TM) " ENDF(G);
     PRINTF _PyMOL_VERSION ENDF(G);
     PRINTF ".\n" ENDF(G);
+    PRINTF " Not affiliated with or endorsed by Schrodinger, LLC.\n \n" ENDF(G);
     PRINTF
-    " Copyright (c) Schrodinger, LLC.\n All Rights Reserved.\n \n" ENDF(G);
+    " Open-Source PyMOL is Copyright (c) Schrodinger, LLC.\n All Rights Reserved.\n \n" ENDF(G);
 
     PRINTF "    Created by Warren L. DeLano, Ph.D. \n \n" ENDF(G);
 
-    /* PRINTF " Other Major Authors and Contributors:\n\n" ENDF(G);
-     * PRINTF " Ralf W. Grosse-Kunstleve, Ph.D.\n \n" ENDF(G);
-     *
-     * NOTICE: Enduring thanks to Ralf, but in point of fact, his
-     * sglite module is no longer used by PyMOL, and thus we should
-     * not mislead everyone by asserting otherwise... */
-
-    PRINTF "    PyMOL is user-supported open-source software.  Although some "
-           "versions\n" ENDF(G);
-    PRINTF "    are freely available, PyMOL is not in the public domain.\n "
-           "\n" ENDF(G);
-
-    PRINTF "    If PyMOL is helpful in your work or study, then please "
-           "volunteer \n" ENDF(G);
-    PRINTF
-    "    support for our ongoing efforts to create open and affordable "
-    "scientific\n" ENDF(G);
-    PRINTF
-    "    software by purchasing a PyMOL Maintenance and/or Support "
-    "subscription.\n\n" ENDF(G);
-
-    PRINTF "    More information can be found at \"http://www.pymol.org\".\n "
-           "\n" ENDF(G);
+    PRINTF "    More information can be found at "
+           "\"https://github.com/manuel-orozco/pymolx\".\n \n" ENDF(G);
 
     PRINTF "    Enter \"help\" for a list of commands.\n" ENDF(G);
     PRINTF
