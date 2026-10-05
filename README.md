@@ -1,5 +1,5 @@
 
-# PymolX
+# PyMOLx
 <img src="./data/pymolx/icons/pymolx_logo.jpeg" height="100" align="right" />
 
 [Open-source foundation](https://pymol.org/#opensource) of the user-sponsored PyMOL molecular visualization system.
