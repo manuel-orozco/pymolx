@@ -137,6 +137,7 @@ void SeqDirty(PyMOLGlobals * G)
 {
   CSeq *I = G->Seq;
   I->Dirty = true;
+  ++I->DirtyCount; // pymolx
   SceneInvalidate(G);
 }
 
@@ -144,7 +145,16 @@ void SeqChanged(PyMOLGlobals * G)
 {
   CSeq *I = G->Seq;
   I->Changed = true;
+  ++I->ChangedCount; // pymolx
   SceneInvalidate(G);
+}
+
+// pymolx: lets a GUI sequence viewer see that residues, colors, objects
+// (changed) or selections (dirty) may have changed
+std::pair<unsigned, unsigned> SeqGetChangeCounts(PyMOLGlobals * G)
+{
+  CSeq *I = G->Seq;
+  return {I->ChangedCount, I->DirtyCount};
 }
 
 int CSeq::drag(int x, int y, int mod)

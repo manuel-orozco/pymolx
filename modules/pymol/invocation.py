@@ -45,7 +45,7 @@ Options
   -d cmd    execute PyMOL command
   -D N      defer_builds_mode=N
   -e        full screen
-  -E N      multisampling (GL_MULTISAMPLE_ARB)
+  -E N      multisampling (GL_MULTISAMPLE_ARB) {default: 4, 0 = off}
   -f N      internal_feedback=N
   -F        internal_feedback=0
   -g file   save image (png) or movie (mpg)
@@ -151,7 +151,7 @@ if True:
     options.keep_thread_alive = 0
     options.after_load_script = ""
     options.quiet = 0
-    options.multisample = 0
+    options.multisample = 4  # pymolx: 4x multisampling (smooth edges), -E 0 = off
     options.incentive_product = 0
     options.window_visible = 1
     options.presentation = 0

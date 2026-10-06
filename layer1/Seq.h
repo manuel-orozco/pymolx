@@ -20,6 +20,7 @@ Z* -------------------------------------------------------------------
 #include "Ortho.h"
 #include "PyMOLObject.h"
 #include "ScrollBar.h"
+#include <utility>
 #include <vector>
 
 struct CSeqCol {
@@ -88,6 +89,9 @@ struct CSeq : public Block {
   int CharMargin { 2 };
   int LastRow { -1 };
   CSeqHandler *Handler {};         /* borrowed pointer */
+  // pymolx: change counters, polled by GUIs with their own sequence viewer
+  unsigned ChangedCount {};
+  unsigned DirtyCount {};
 
   CSeq(PyMOLGlobals * G) : Block(G), m_ScrollBar(G, true) {}
 
@@ -100,6 +104,8 @@ struct CSeq : public Block {
 
 int SeqInit(PyMOLGlobals * G);
 void SeqFree(PyMOLGlobals * G);
+// pymolx: (changed, dirty) counters, see SeqChanged and SeqDirty
+std::pair<unsigned, unsigned> SeqGetChangeCounts(PyMOLGlobals * G);
 Block *SeqGetBlock(PyMOLGlobals * G);
 
 int SeqGetHeight(PyMOLGlobals * G);

@@ -62,8 +62,9 @@ used in code and commits: [INCENTIVE_PARITY.md](INCENTIVE_PARITY.md).
   (draws PyMOL color codes like `\900`).
 - Main window parts: toolbar (`gui/toolbar.py`), content panel with
   wizard panel, state bar and toggle toolbar (`gui/content_panel.py`),
-  mouse mode menu (`gui/mouse_modes.py`). Output/command line is the
-  bottom dock `window.ext_window`.
+  mouse mode menu (`gui/mouse_modes.py`), sequence viewer dock above the
+  viewer (`gui/sequence_viewer.py`, data in `pymolx/sequence.py`).
+  Output/command line is the bottom dock `window.ext_window`.
 
 ## Gotchas found the hard way
 
@@ -80,6 +81,10 @@ used in code and commits: [INCENTIVE_PARITY.md](INCENTIVE_PARITY.md).
   (`reinitialize store` runs later in `adapt_to_hardware`).
 - OpenMM picks `label_asym_id` as chain when it has more values than
   `auth_asym_id`; `pymolx.mm` writes its own mmCIF to avoid this.
+- `_cmd.get_seq_change_counts` (changed, dirty) tells when residues,
+  colors or selections may have changed. Queries on a selection
+  expression create temporary selections and bump "dirty" themselves:
+  re-read the counters after your own queries.
 - Kill test processes by PID, never `pkill -f` with a pattern that
   matches your own shell command.
 
@@ -90,22 +95,5 @@ used in code and commits: [INCENTIVE_PARITY.md](INCENTIVE_PARITY.md).
   `master` directly. Keep build artifacts and downloads out of the repo.
 - Decisions already made: keep ESC text/graphics toggle and the startup
   text in the viewer (like Incentive); Display > Background has Dark Navy
-  `#000430` and Custom...; `interface_analysis` ΔiG is calibrated to PISA.
-
-## Next task: Qt sequence viewer (parity item L-07)
-
-Replace the OpenGL sequence bar (setting `seq_view`, toggled by the SEQ
-button of the toggle toolbar) with a Qt widget, docked at the top of the
-viewer, so it can use the console font (Consolas) and behave better:
-
-- one row per chain (object/chain label at the left), residue one-letter
-  codes in a monospace font, residue numbers every 5 or 10 above;
-  horizontal scrolling; colors from the residues' colors (like the GL bar)
-- click/drag/shift-click selects residues into `sele` and follows
-  `mouse_selection_mode`; selections made in the viewer are highlighted
-- refresh when objects, colors or selections change (poll cheaply, like
-  `ContentPanel.refresh`), hide when there are no polymers
-- SEQ toggle shows/hides the Qt viewer instead of the GL one (keep
-  `seq_view` 0 so both never show); keep working headless (no Qt in core)
-- tests in `testing/tests/pymolx/` (headless offscreen Qt, like
-  `test_panel.py`) and a GUI screenshot check
+  `#000430` and Custom...; `interface_analysis` ΔiG is calibrated to PISA;
+  4× multisampling by default (`options.multisample`, `-E 0` = off).

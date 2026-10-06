@@ -186,3 +186,15 @@ def test_startup_text():
     pymolx.hide_startup_text(cmd)
     assert cmd.get_setting_boolean('text')
     cmd.set('text', 0)
+
+
+def test_multisample_default():
+    # smooth edges in the viewer: 4x multisampling unless "-E N" says
+    # otherwise (Qt and GLUT fall back to none if unavailable)
+    import copy
+    from pymol import invocation
+    assert invocation.options.multisample == 4
+    for argv, samples in [(['pymol', '-E', '0'], 0), (['pymol', '-E', '8'], 8)]:
+        options = copy.copy(invocation.options)
+        invocation.parse_args(argv, options=options, restricted=1)
+        assert options.multisample == samples

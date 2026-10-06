@@ -230,11 +230,11 @@ def test_group_arrow(window):
 def test_toggles(window):
     toggles = window.content_panel.toggles
 
+    # the Qt sequence viewer, not the OpenGL bar (test_sequence.py)
     toggles.seq_button.click()
-    assert cmd.get_setting_int('seq_view') == 1
-    cmd.set('seq_view', 0)
-    fire_setting_callbacks(window)
-    assert not toggles.seq_button.isChecked()
+    assert toggles.seq_button.isChecked()
+    assert cmd.get_setting_int('seq_view') == 0
+    toggles.seq_button.click()
 
     assert toggles.command_button.isChecked()
     toggles.command_button.click()

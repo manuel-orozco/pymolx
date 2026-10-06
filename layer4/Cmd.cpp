@@ -2409,6 +2409,18 @@ static PyObject* CmdGetPanelList(PyObject* self, PyObject* args)
   return result;
 }
 
+/*
+ * pymolx: (changed, dirty) counters of the sequence viewer, for GUIs
+ * which draw their own (parity item L-07)
+ */
+static PyObject* CmdGetSeqChangeCounts(PyObject* self, PyObject* args)
+{
+  PyMOLGlobals* G = nullptr;
+  API_SETUP_ARGS(G, self, args, "O", &self);
+  auto counts = SeqGetChangeCounts(G);
+  return Py_BuildValue("(II)", counts.first, counts.second);
+}
+
 static PyObject *CmdInterrupt(PyObject * self, PyObject * args)
 {
   PyMOLGlobals *G = nullptr;
@@ -6500,6 +6512,7 @@ static PyMethodDef Cmd_methods[] = {
   {"get_movie_playing", CmdGetMoviePlaying, METH_VARARGS},
   {"get_names", CmdGetNames, METH_VARARGS},
   {"get_panel_list", CmdGetPanelList, METH_VARARGS},
+  {"get_seq_change_counts", CmdGetSeqChangeCounts, METH_VARARGS},
   {"get_object_color_index", CmdGetObjectColorIndex, METH_VARARGS},
   {"get_object_matrix", CmdGetObjectMatrix, METH_VARARGS},
   {"get_object_ttt", CmdGetObjectTTT, METH_VARARGS},

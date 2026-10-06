@@ -369,8 +369,9 @@ class ToggleToolbar(QtWidgets.QToolBar):
         self._button('', 'wand', 'Wizards', window.menudict.get('Wizard'))
         self.addSeparator()
 
-        self.seq_button = self._setting_toggle('SEQ', None, 'seq_view',
-                                               'Sequence viewer')
+        # pymolx.gui.sequence_viewer connects it
+        self.seq_button = self._button('SEQ', None, 'Sequence viewer')
+        self.seq_button.setCheckable(True)
         self.addSeparator()
         self.timeline_button = self._setting_toggle(
             '', 'timeline', 'movie_panel', 'Movie timeline')
