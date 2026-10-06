@@ -110,6 +110,127 @@ def _state(state, _self):
     return _self.get_state() if state < 1 else state
 
 
+def _cif_value(value):
+    value = str(value)
+    if value == '':
+        return '.'
+    if "'" in value or ' ' in value:
+        return '"%s"' % value
+    return value
+
+
+def _export_cif(selection, state, _self):
+    '''
+    mmCIF text for OpenMM/PDBFixer. Written here rather than with
+    cmd.get_str: label_asym_id is set to the chain (author chain ID),
+    otherwise OpenMM may take the label IDs (one per molecule) as chains,
+    and auth_seq_id carries the residue number.
+
+    :raises ValueError: if (chain, residue, atom name) isn't unique, as
+        coordinates are matched back by these
+    '''
+    rows = []
+    _self.iterate_state(
+        state, '(%s)' % selection,
+        'rows.append((type, elem, name, alt, resn, chain, resv, resi, '
+        'x, y, z, q, b))', space={'rows': rows})
+
+    seen = set()
+    duplicates = []
+    lines = ['data_pymolx', 'loop_'] + ['_atom_site.' + column for column in (
+        'group_PDB', 'id', 'type_symbol', 'label_atom_id', 'label_alt_id',
+        'label_comp_id', 'label_asym_id', 'label_seq_id',
+        'pdbx_PDB_ins_code', 'Cartn_x', 'Cartn_y', 'Cartn_z', 'occupancy',
+        'B_iso_or_equiv', 'auth_seq_id', 'auth_asym_id',
+        'pdbx_PDB_model_num')]
+    for n, (record, elem, name, alt, resn, chain, resv, resi, x, y, z, q,
+            b) in enumerate(rows, 1):
+        key = (chain, resi, name, alt)
+        if key in seen:
+            duplicates.append(key)
+        seen.add(key)
+        inscode = resi[len(str(resv)):] if resi.startswith(str(resv)) else ''
+        lines.append(' '.join(_cif_value(v) for v in (
+            record, n, elem, name, alt, resn, chain,
+            resv, inscode or '?', '%.3f' % x, '%.3f' % y, '%.3f' % z,
+            '%.2f' % q, '%.2f' % b, resv, chain, 1)))
+    if duplicates:
+        raise ValueError(
+            'atoms are not unique by chain, residue and name (e.g. %s); '
+            'rename chains or residues first' % (
+                ', '.join('%s/%s/%s' % k[:3] for k in duplicates[:3])))
+    return '\n'.join(lines) + '\n'
+
+
+def _load_topology(topology, positions, name, b_factors, _self):
+    '''
+    Create a PyMOL object from an OpenMM topology with its exact bonds
+    (loading a file would make PyMOL guess bonds from distances, which
+    goes wrong for newly built atoms that start out close together).
+    '''
+    from chempy import models, Atom, Bond
+    from openmm import unit
+
+    xyz = positions.value_in_unit(unit.angstrom)
+    model = models.Indexed()
+    for atom in topology.atoms():
+        residue = atom.residue
+        a = Atom()
+        a.name = atom.name
+        a.symbol = atom.element.symbol if atom.element is not None else 'X'
+        a.resn = residue.name
+        a.resi = _residue_id(residue)
+        digits = residue.id.lstrip('-')
+        a.resi_number = int(residue.id) if digits.isdigit() else 0
+        a.chain = a.segi = _chain_id(residue.chain)
+        a.hetatm = int(residue.name not in STANDARD_RESIDUES)
+        a.coord = [float(c) for c in xyz[atom.index]]
+        a.q = 1.0
+        a.b = b_factors.get((a.chain, a.resi, a.name), 0.0)
+        model.add_atom(a)
+    for bond in topology.bonds():
+        b = Bond()
+        b.index = [bond.atom1.index, bond.atom2.index]
+        order = getattr(bond, 'order', None)
+        b.order = order if order in (1, 2, 3) else 1
+        model.add_bond(b)
+    _self.load_model(model, name, zoom=0)
+
+
+def _sequences_from_source(source):
+    '''
+    Polymer sequences per author chain from a structure file or PDB ID,
+    as PDBFixer Sequence objects.
+    '''
+    from pdbfixer.pdbfixer import Sequence
+    import gemmi
+
+    path = source
+    if not os.path.exists(source):
+        import tempfile
+        import urllib.request
+        url = 'https://files.rcsb.org/download/%s.cif' % source.strip().lower()
+        with urllib.request.urlopen(url, timeout=60) as response:
+            data = response.read()
+        handle, path = tempfile.mkstemp(suffix='.cif')
+        with os.fdopen(handle, 'wb') as out:
+            out.write(data)
+    try:
+        structure = gemmi.read_structure(path)
+    finally:
+        if path != source:
+            os.unlink(path)
+    structure.setup_entities()
+    sequences = []
+    for chain in structure[0]:
+        polymer = chain.get_polymer()
+        entity = structure.get_entity_of(polymer) if len(polymer) else None
+        if entity is not None and entity.full_sequence:
+            sequences.append(Sequence(chain.name, [
+                gemmi.Entity.first_mon(item) for item in entity.full_sequence]))
+    return sequences
+
+
 # PDBFixer
 
 
@@ -155,7 +276,7 @@ SEE ALSO
     name = name or _self.get_legal_name(objects[0] + '_fixed')
     quiet = int(quiet)
 
-    text = _self.get_str('cif', '(%s)' % selection, state)
+    text = _export_cif(selection, state, _self)
     fixer = PDBFixer(pdbxfile=io.StringIO(text))
     report = {'object': name, 'atoms_before': _self.count_atoms(
         '(%s)' % selection, state=state)}
@@ -167,11 +288,7 @@ SEE ALSO
         if not source:
             raise ValueError('adding missing residues needs the original '
                              'structure file or PDB ID ("source")')
-        if os.path.exists(source):
-            original = PDBFixer(filename=source)
-        else:
-            original = PDBFixer(pdbid=source)
-        fixer.sequences = original.sequences
+        fixer.sequences = _sequences_from_source(source)
         fixer.findMissingResidues()
     report['missing_residues'] = sum(
         len(v) for v in fixer.missingResidues.values())
@@ -205,20 +322,13 @@ SEE ALSO
         fixer.addMissingHydrogens(float(ph))
     report['hydrogens_added'] = fixer.topology.getNumAtoms() - n_before_h
 
-    out = io.StringIO()
-    app.PDBxFile.writeFile(fixer.topology, fixer.positions, out,
-                           keepIds=True)
-    _self.delete(name)
-    _self.load_raw(out.getvalue(), 'cif', name, zoom=0)
-    _self.alter('%%%s and chain "."' % name, 'chain=""')
-
-    # keep B-factors (e.g. AlphaFold pLDDT) of atoms which were there
+    # B-factors (e.g. AlphaFold pLDDT) of atoms which were there
     b_factors = {}
     _self.iterate_state(state, '(%s)' % selection,
                         'b_factors[(chain, resi, name)] = b',
                         space={'b_factors': b_factors})
-    _self.alter('%' + name, 'b = b_factors.get((chain, resi, name), 0.0)',
-                space={'b_factors': b_factors})
+    _self.delete(name)
+    _load_topology(fixer.topology, fixer.positions, name, b_factors, _self)
     _self.disable(' '.join(objects))
 
     report['atoms_after'] = _self.count_atoms('%' + name)
@@ -482,7 +592,7 @@ def prepare_minimization(selection='all', *, forcefield='amber14',
 
     system = '(%s) and not hydro' % ' or '.join(
         '%' + obj for obj in job.objects)
-    job.input_text = _self.get_str('cif', system, job.state)
+    job.input_text = _export_cif(system, job.state, _self)
     _self.iterate_state(job.state, system, 'keys.add((chain, resi, name))',
                         space={'keys': job.existing_keys})
     _self.iterate_state(job.state, '(%s) and not hydro' % selection,

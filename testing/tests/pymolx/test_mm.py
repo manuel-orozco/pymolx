@@ -198,3 +198,67 @@ def test_dialog():
         assert dialog.solvent.currentData() == 'vacuum'
     finally:
         dialog.deleteLater()
+
+
+# regressions: chains renamed by OpenMM's chain-ID heuristic, and bonds
+# guessed from distances for newly built atoms (stretched "starbursts")
+
+def two_chains():
+    '''
+    Chains H and L whose mmCIF label IDs (segi) outnumber the chains, the
+    case where OpenMM would otherwise use label IDs as chains.
+    '''
+    cmd.fab('EVQLVESGGG', 'h', ss=1)
+    cmd.fab('DIQMTQSPSS', 'l', ss=1)
+    cmd.alter('h', 'chain="H"; segi="B"')
+    cmd.alter('l', 'chain="L"; segi="C"; resv += 100')
+    cmd.create('ab', 'h or l')
+    cmd.delete('h l')
+    cmd.alter('ab and chain L', 'segi="D"', space={})
+    cmd.alter('ab and chain L and resi 106-110', 'segi="E"')
+    cmd.remove('ab and hydro')
+    cmd.translate([0, 15, 0], 'ab and chain L')
+
+
+def bond_problems(obj):
+    import math
+    from collections import Counter
+    model = cmd.get_model(obj)
+    stretched = sum(
+        1 for b in model.bond
+        if math.dist(model.atom[b.index[0]].coord,
+                     model.atom[b.index[1]].coord) > 2.2)
+    degree = Counter(i for b in model.bond for i in b.index)
+    crowded = sum(1 for n in degree.values() if n > 4)
+    return stretched, crowded
+
+
+def test_chains_kept_with_many_label_ids():
+    two_chains()
+    before = coords('ab and chain L')
+    report = cmd.minimize('ab', platform='CPU', max_iterations=100, quiet=1)
+    assert report['updated_atoms'] == cmd.count_atoms('ab')
+    assert abs(coords('ab and chain L') - before).max() > 0.01
+
+    cmd.fix_structure('ab', quiet=1)
+    assert cmd.get_chains('ab_fixed') == ['H', 'L']
+
+
+def test_fixed_structure_has_exact_bonds():
+    two_chains()
+    cmd.remove('ab and chain H and resi 3 and not name N+CA+C+O+CB')
+    cmd.fix_structure('ab', quiet=1)
+    assert bond_problems('ab_fixed') == (0, 0)
+    # one bond per pair; peptide bonds across residues are there
+    assert cmd.count_atoms('ab_fixed and chain H and resi 1 and name C '
+                           'and bound_to (resi 2 and name N)') == 1
+    cmd.minimize('ab_fixed', platform='CPU', max_iterations=200, quiet=1)
+    assert bond_problems('ab_fixed') == (0, 0)
+
+
+def test_duplicate_atoms_are_refused():
+    peptide()
+    cmd.copy('pep2', 'pep')
+    cmd.create('both', 'pep or pep2')  # same chain, residues and names
+    with pytest.raises(ValueError, match='not unique'):
+        mm.prepare_minimization('both', platform='CPU')
