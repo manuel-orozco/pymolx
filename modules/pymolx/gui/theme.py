@@ -32,6 +32,12 @@ COLORS = {
     'all_c': '#54bd41',
 }
 
+# output pane font: first installed family wins (Consolas is a Microsoft
+# font, so it isn't installed everywhere)
+CONSOLE_FONTS = ['Consolas', 'Cascadia Mono', 'Inconsolata',
+                 'DejaVu Sans Mono']
+CONSOLE_FONT_SIZE = 9  # points
+
 STYLESHEET_PATH = '$PYMOL_DATA/pymolx/styles/dark.qss'
 ICON_DIR = '$PYMOL_DATA/pymolx/icons'
 
@@ -86,6 +92,26 @@ def palette():
         pal.setColor(group.Disabled, r, c['text_dim'])
 
     return pal
+
+
+def console_font(families=None):
+    '''
+    QFont for the output pane: the first installed family of
+    CONSOLE_FONTS, else the system monospace font.
+
+    :param families: installed families (default: ask Qt)
+    '''
+    from pymol.Qt import QtGui
+    if families is None:
+        try:
+            families = QtGui.QFontDatabase.families()    # Qt 6
+        except TypeError:
+            families = QtGui.QFontDatabase().families()  # Qt 5
+    installed = set(families)
+    family = next((f for f in CONSOLE_FONTS if f in installed), 'Monospace')
+    font = QtGui.QFont(family, CONSOLE_FONT_SIZE)
+    font.setStyleHint(QtGui.QFont.StyleHint.Monospace)
+    return font
 
 
 def apply(app, window, _self):

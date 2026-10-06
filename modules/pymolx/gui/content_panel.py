@@ -413,14 +413,8 @@ class ToggleToolbar(QtWidgets.QToolBar):
         return btn
 
     def _mouse_menu(self):
-        menu = menus.PyMenu('', self)
-
-        @menu.aboutToShow.connect
-        def _():
-            menu.clear()
-            menus.fill_menu(menu, pymol_menu.mouse_config(self.cmd), self.cmd)
-
-        return menu
+        from .mouse_modes import MouseModeMenu
+        return MouseModeMenu(self.cmd, self)
 
     def _update_mouse_mode(self, name):
         self.mouse_button.setText(name or 'Mouse')

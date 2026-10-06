@@ -140,7 +140,7 @@ class PyMOLQtGUI(QtWidgets.QMainWindow, pymol._gui.PyMOLDesktopGUI):
             self.browser.setFocus()
 
         # Font
-        self.browser.setFont(getMonospaceFont())
+        self.browser.setFont(pymolx.gui.theme.console_font())
         connectFontContextMenu(self.browser)
 
         lineeditlayout = QtWidgets.QHBoxLayout()

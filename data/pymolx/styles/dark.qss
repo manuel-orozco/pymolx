@@ -62,6 +62,45 @@ QMenu::item:disabled
     color:          $text_dim;
 }
 
+/* mouse mode menu and its controls table (like Incentive PyMOL) */
+
+QMenu#mouse_mode_menu
+{
+    border:         1px solid $accent;
+}
+
+QFrame#mouse_controls_panel
+{
+    background:     $menu;
+    border:         1px solid $accent;
+}
+
+QLabel#mouse_controls_title
+{
+    color:          $text;
+    font-size:      13px;
+    padding:        18px 12px;
+    border-bottom:  1px solid $border;
+}
+
+QLabel#mouse_controls_keys
+{
+    color:          #ff7a6b;
+    font-size:      13px;
+}
+
+QLabel#mouse_controls_axis
+{
+    color:          #8c8cff;
+    font-size:      13px;
+}
+
+QLabel#mouse_controls_cell
+{
+    color:          $text;
+    font-size:      13px;
+}
+
 /* menus from pymol.menu: menus.PyMenu draws the (colored) item text */
 QMenu#pymol_menu::item,
 QMenu#pymol_menu::item:selected,

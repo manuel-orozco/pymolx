@@ -253,3 +253,13 @@ def test_window_actions(window):
     movie = actions(btns['•••'].menu())['Movie'].menu()
     assert list(actions(movie)) == [
         'Rewind', 'Backward', 'Stop', 'Play', 'Forward', 'End', 'Clear Movie']
+
+
+def test_console_font(app):
+    font = theme.console_font(['Arial', 'Consolas', 'DejaVu Sans Mono'])
+    assert font.family() == 'Consolas'
+    font = theme.console_font(['Arial', 'DejaVu Sans Mono'])
+    assert font.family() == 'DejaVu Sans Mono'
+    assert font.pointSize() == theme.CONSOLE_FONT_SIZE
+    # installed fonts: always a font
+    assert theme.console_font().family()
