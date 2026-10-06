@@ -35,6 +35,11 @@ dev = [
   "pytest==8.2.2",
   "requests==2.32.3",
 ]
+# pymolx: structure preparation and minimization (fix_structure, minimize)
+mm = [
+  "openmm>=8.1",
+  "pdbfixer>=1.9",
+]
 # pymolx: libraries used by Incentive-parity features (see INCENTIVE_PARITY.md, D-03)
 science = [
   "biopython>=1.80",

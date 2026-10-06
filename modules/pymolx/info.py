@@ -15,6 +15,8 @@ OPTIONAL_MODULES = {
     'rdkit': 'P-01 clean, P-02 assign_stereo, P-03 pi_interactions, C-03',
     'gemmi': 'P-09 load_mtz',
     'Bio': 'sequence tools (biopython)',
+    'openmm': 'minimize (energy minimization)',
+    'pdbfixer': 'fix_structure (structure preparation)',
 }
 
 # executable -> what needs it
