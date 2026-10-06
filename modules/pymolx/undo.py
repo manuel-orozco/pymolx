@@ -218,6 +218,11 @@ class UndoStack:
     def enable(self):
         self.enabled = True
 
+    def clear_history(self):
+        with self._lock:
+            self.undo_stack.clear()
+            self.redo_stack.clear()
+
     def disable(self):
         self.enabled = False
         with self._lock:

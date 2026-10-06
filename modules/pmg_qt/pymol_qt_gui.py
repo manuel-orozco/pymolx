@@ -391,6 +391,9 @@ PyMOL> color ye<TAB>    (will autocomplete "yellow")
         Filter out <Tab> event to do tab-completion instead of move focus
         '''
         type_ = event.type()
+        if (type_ == QtCore.QEvent.Type.MouseButtonPress and
+                watched is self.pymolwidget):
+            pymolx.hide_startup_text(self.cmd)  # like Incentive PyMOL
         if type_ == QtCore.QEvent.Type.KeyRelease:
             if event.key() == Qt.Key.Key_Tab:
                 # silently skip tab release

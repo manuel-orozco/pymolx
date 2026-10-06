@@ -324,6 +324,10 @@ USAGE
             png_url = ""
             if show_splash==1: # generic / open-source
                 import pymolx.branding
+                if not pymolx.branding.SHOW_SPLASH_IMAGE:
+                    import pymolx
+                    pymolx.show_startup_text(_self)
+                    return DEFAULT_SUCCESS
                 png_path = _self.exp_path(pymolx.branding.SPLASH_PNG)
             elif show_splash==2: # evaluation builds
                 png_path = _self.exp_path("$PYMOL_DATA/pymol/epymol.png")

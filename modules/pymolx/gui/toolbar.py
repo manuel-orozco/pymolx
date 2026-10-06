@@ -29,7 +29,18 @@ SELECTION_MODES = [
 ]
 
 def icon(_self, name):
-    return QtGui.QIcon(_self.exp_path('%s/%s.svg' % (theme.ICON_DIR, name)))
+    '''
+    Icon from the pymolx icon directory. If "<name>-on.svg" exists, it is
+    used for the checked state of checkable buttons.
+    '''
+    import os
+    path = _self.exp_path('%s/%s.svg' % (theme.ICON_DIR, name))
+    result = QtGui.QIcon(path)
+    path_on = path[:-4] + '-on.svg'
+    if os.path.exists(path_on):
+        result.addFile(path_on, QtCore.QSize(), QtGui.QIcon.Mode.Normal,
+                       QtGui.QIcon.State.On)
+    return result
 
 
 class Toolbar(QtWidgets.QToolBar):
@@ -46,20 +57,26 @@ class Toolbar(QtWidgets.QToolBar):
         self.setMovable(False)
         self.setIconSize(QtCore.QSize(16, 16))
 
+        # like Incentive PyMOL, 1px dividers separate the buttons
         self._add_selection_mode()
+        self.addSeparator()
         self._add_undo_redo()
         self.addSeparator()
-
         self.add_button('Zoom', lambda: cmd.zoom(animate=1.0),
                         menu=self._zoom_menu(),
                         popup=QtWidgets.QToolButton.ToolButtonPopupMode.MenuButtonPopup,
                         tooltip='Zoom on all objects')
+        self.addSeparator()
         self.add_button('Orient', lambda: cmd.orient(animate=1.0),
                         tooltip='Orient on all objects')
+        self.addSeparator()
         self._add_rock()
-        self.add_button('Presets...', menu=self._dynamic_menu(
+        self.addSeparator()
+        presets = self.add_button('Presets...', menu=self._dynamic_menu(
             lambda: pymol_menu.presets(cmd, 'all')),
             tooltip='Apply a representation preset to all objects')
+        presets.setProperty('dropdown', False)
+        presets.setProperty('indicator', False)
 
         spacer = QtWidgets.QWidget(self)
         spacer.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding,
@@ -67,15 +84,19 @@ class Toolbar(QtWidgets.QToolBar):
         self.addWidget(spacer)
 
         self.add_button('Builder...', window.open_builder_panel)
+        self.addSeparator()
         self.add_button('Scenes', window.scene_panel_menu_dialog)
+        self.addSeparator()
         # render dialog is constructed when the menu is first shown
         self.add_button('Draw/Ray', icon_name='camera',
                         menu=WidgetMenu(window).setSetupUi(window.render_dialog),
                         tooltip='Draw or ray trace an image')
-        more = self.add_button('…', menu=self._more_menu(),
+        self.addSeparator()
+        more = self.add_button('\u2022\u2022\u2022', menu=self._more_menu(),
                                tooltip='More actions')
         more.setObjectName('more_button')
         more.setProperty('dropdown', False)
+        more.setProperty('indicator', False)
 
     def add_button(self, text, callback=None, *, icon_name=None, tooltip=None,
                    menu=None,

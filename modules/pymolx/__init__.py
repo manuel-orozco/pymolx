@@ -24,6 +24,38 @@ def _init(_self):
     undo.install(_self)
 
 
+_startup_text = False
+
+
+def show_startup_text(_self):
+    '''
+    Like Incentive PyMOL, show the startup text (banner) in the viewer
+    until something is loaded or the viewer is clicked.
+    '''
+    global _startup_text
+    _startup_text = True
+    _self.set('text', 1, quiet=1)
+
+
+def hide_startup_text(_self):
+    '''
+    End the startup text, if it is still shown.
+    '''
+    global _startup_text
+    if _startup_text:
+        _startup_text = False
+        _self.set('text', 0, quiet=1)
+
+
+def _ready(_self):
+    '''
+    Called once from pymol.adapt_to_hardware(), after the adapted state
+    is stored as default. Startup changes are not undo steps.
+    '''
+    from . import undo
+    undo.stack.clear_history()
+
+
 def _started(_self):
     '''
     Called once from pymol.adapt_to_hardware(), when the PyMOL instance

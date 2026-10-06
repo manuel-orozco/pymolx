@@ -350,6 +350,8 @@ def adapt_to_hardware(self):
     # store our adapted state as default
     cmd.reinitialize("store")
 
+    pymolx._ready(cmd)
+
 def launch_gui(self):
     '''
     Launch if requested:

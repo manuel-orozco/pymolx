@@ -12,13 +12,15 @@ the OpenGL panel opens, from pymol.menu.
 from pymol.Qt import QtCore, QtGui, QtWidgets
 from pymol import menu as pymol_menu
 
+import pymolx
 from .. import panel
 from . import menus
 from .toolbar import icon
 
 Qt = QtCore.Qt
 
-PANEL_WIDTH = 300
+PANEL_WIDTH = 280
+OUTPUT_HEIGHT = 220
 QWIDGETSIZE_MAX = (1 << 24) - 1
 REFRESH_MS = 250
 
@@ -113,8 +115,8 @@ class PanelRow(QtWidgets.QFrame):
         self.setProperty('all_row', item.type == 'all')
 
         layout = QtWidgets.QHBoxLayout(self)
-        layout.setContentsMargins(8 + 14 * item.nest_level, 5, 6, 5)
-        layout.setSpacing(4)
+        layout.setContentsMargins(8 + 14 * item.nest_level, 7, 3, 7)
+        layout.setSpacing(2)
 
         if item.is_group:
             arrow = QtWidgets.QToolButton(self)
@@ -128,6 +130,7 @@ class PanelRow(QtWidgets.QFrame):
         dot = QtWidgets.QLabel('●', self)
         dot.setObjectName('panel_dot')
         layout.addWidget(dot)
+        layout.addSpacing(6)
 
         text = item.name
         if item.type == 'selection':
@@ -348,26 +351,30 @@ class ToggleToolbar(QtWidgets.QToolBar):
         self.setObjectName('pymolx_toggles')
         self.setIconSize(QtCore.QSize(16, 16))
 
+        # like Incentive PyMOL: mode name and its own arrow segment, all
+        # buttons separated by 1px dividers
         self.mouse_button = self._button('', 'mouse',
                                          'Mouse mode', self._mouse_menu())
         self.mouse_button.setToolButtonStyle(
             Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self.mouse_button.setProperty('dropdown', True)
+        self.mouse_button.setPopupMode(
+            QtWidgets.QToolButton.ToolButtonPopupMode.MenuButtonPopup)
+        self.mouse_button.setProperty('split', True)
+        self.mouse_button.clicked.connect(self.mouse_button.showMenu)
         window.setting_callbacks[cmd.setting._get_index(
             'button_mode_name')].append(self._update_mouse_mode)
         self._update_mouse_mode(cmd.get('button_mode_name'))
-
-        spacer = QtWidgets.QWidget(self)
-        spacer.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding,
-                             QtWidgets.QSizePolicy.Policy.Preferred)
-        self.addWidget(spacer)
+        self.addSeparator()
 
         self._button('', 'wand', 'Wizards', window.menudict.get('Wizard'))
+        self.addSeparator()
 
         self.seq_button = self._setting_toggle('SEQ', None, 'seq_view',
                                                'Sequence viewer')
+        self.addSeparator()
         self.timeline_button = self._setting_toggle(
             '', 'timeline', 'movie_panel', 'Movie timeline')
+        self.addSeparator()
 
         self.command_button = self._button('', 'terminal',
                                            'Show or hide the command output')
@@ -480,6 +487,13 @@ class ContentPanel(QtWidgets.QWidget):
         self.timer.start(REFRESH_MS)
         self.refresh()
 
+    def minimumSizeHint(self):
+        # always wide enough for the whole toggle toolbar
+        hint = super().minimumSizeHint()
+        return QtCore.QSize(
+            max(hint.width(), self.toggles.sizeHint().width() + 2),
+            hint.height())
+
     def row_widgets(self):
         return [self.rows_layout.itemAt(i).widget()
                 for i in range(self.rows_layout.count() - 1)]
@@ -494,6 +508,8 @@ class ContentPanel(QtWidgets.QWidget):
         self.wizard_panel.refresh()
         self.state_bar.refresh()
         items = panel.get_panel_list(_self=self.cmd)
+        if len(items) > 1:  # something besides "all"
+            pymolx.hide_startup_text(self.cmd)
         if items == self._items and not force:
             return
         self._items = items
@@ -513,6 +529,9 @@ def setup(window):
     cmd = window.cmd
     cmd.set('internal_gui', 0)
     cmd.set('internal_feedback', 0)
+    cmd.set('internal_prompt', 0)
+    # like Incentive PyMOL, the timeline is off until toggled
+    cmd.set('movie_panel', 0)
 
     content = ContentPanel(window)
     dock = QtWidgets.QDockWidget('Content', window)
@@ -527,12 +546,22 @@ def setup(window):
     window.setCorner(Qt.Corner.BottomRightCorner,
                      Qt.DockWidgetArea.BottomDockWidgetArea)
     window.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
-    window.resizeDocks([dock], [PANEL_WIDTH], Qt.Orientation.Horizontal)
+    # wide enough for the whole toggle toolbar
+    width = PANEL_WIDTH
+    window.resizeDocks([dock], [width], Qt.Orientation.Horizontal)
+
+    # taller output pane, like Incentive PyMOL; the window grows with it
+    ext_height = window.ext_window.sizeHint().height()
+    if OUTPUT_HEIGHT > ext_height:
+        window.resize(window.width(),
+                      window.height() + OUTPUT_HEIGHT - ext_height)
+        window.resizeDocks([window.ext_window], [OUTPUT_HEIGHT],
+                           Qt.Orientation.Vertical)
 
     # the window was sized for the OpenGL panel (220 pixels, if shown)
     import pymol.invocation
     reserved = 220 if pymol.invocation.options.internal_gui else 0
-    window.resize(window.width() + PANEL_WIDTH - reserved, window.height())
+    window.resize(window.width() + width - reserved, window.height())
     return content
 
 

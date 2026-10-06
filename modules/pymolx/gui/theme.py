@@ -9,18 +9,27 @@ data/pymolx/styles/dark.qss.
 import string
 
 COLORS = {
-    'window': '#2b2b2e',      # main window, toolbars
-    'panel': '#333337',       # menus, docks, buttons
-    'base': '#1e1e21',        # text areas: output, command line
-    'text': '#dcdce0',
-    'text_dim': '#9a9aa2',
-    'border': '#44444a',
-    'hover': '#3d3d44',
-    'accent': '#9b7be0',      # active state, highlights
-    'accent_text': '#b9a2f0', # prompt, selection mode
-    'selection': '#5a4a8a',   # selected text
-    'enabled': '#5cb85c',     # enabled object dot, "All" C button
-    'button': '#4a4a52',      # A/S/H/L/C buttons
+    # measured from Incentive PyMOL 3.1 screenshots: neutral greys
+    'window': '#343434',      # menu bar, toolbars, content panel
+    'panel': '#3e3e3e',       # inputs, buttons
+    'base': '#222222',        # output pane, active toggles
+    'menu': '#2e2e2e',        # popup menus
+    'text': '#cecece',
+    'text_bright': '#e0e0e0', # output text
+    'text_dim': '#7a7a7a',
+    'border': '#494949',      # 1px dividers
+    'hover': '#404040',
+    'accent': '#9b81fd',      # selection mode, prompt, active toggles
+    'accent_text': '#9b81fd',
+    'selection': '#4b3d7a',   # selected text and menu items
+    'enabled': '#33ff33',     # enabled entry dot
+    'button': '#575757',      # A/S/H/L/C buttons of enabled entries
+    # A/S/H/L/C buttons of the "All" row
+    'all_a': '#7b519e',
+    'all_s': '#7e5da8',
+    'all_h': '#816eb7',
+    'all_l': '#837dc5',
+    'all_c': '#54bd41',
 }
 
 STYLESHEET_PATH = '$PYMOL_DATA/pymolx/styles/dark.qss'

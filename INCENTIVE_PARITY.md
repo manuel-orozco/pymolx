@@ -147,7 +147,7 @@ wand menus.
 
 | ID | Status | Item | Where to work | Effort |
 |---|---|---|---|---|
-| L-01 | [x] | Application theme: dark Fusion palette plus stylesheet, purple accent. Colors are defined once in `COLORS` | [modules/pymolx/gui/theme.py](modules/pymolx/gui/theme.py), [data/pymolx/styles/dark.qss](data/pymolx/styles/dark.qss) | M |
+| L-01 | [x] | Application theme: dark Fusion palette plus stylesheet, purple accent. Colors, sizes and dividers measured from a running Incentive PyMOL 3.1.8 (neutral greys `#343434`/`#222222`, `#494949` dividers, `#9b81fd` accent). Like Incentive, the viewer shows the startup text until something is loaded or clicked (no splash image) | [modules/pymolx/gui/theme.py](modules/pymolx/gui/theme.py), [data/pymolx/styles/dark.qss](data/pymolx/styles/dark.qss) | M |
 | L-02 | [~] | Our own icon set for the toolbar and menus. Done: pointer, undo, redo, camera, chevron | [data/pymolx/icons/](data/pymolx/icons/) | M |
 | L-03 | [~] | Dock layout. Done: output pane and command line moved to the bottom, full width. Open: sequence viewer, scenes and movie panels; "Reset layout" action | [pymol_qt_gui.py](modules/pmg_qt/pymol_qt_gui.py), [scene_bin_gui.py](modules/pmg_qt/scene_bin_gui.py) | M |
 | L-04 | [~] | Default settings at startup (shaders, AA, ray, cartoon, background), shipped as a startup module, not as `Setting.cpp` edits. **Mechanism done; `DEFAULTS` stays empty until values are confirmed side by side** | [modules/pymolx/defaults.py](modules/pymolx/defaults.py) | S |
@@ -163,6 +163,7 @@ wand menus.
 | L-14 | [x] | Toggle toolbar: mouse mode dropdown (`pymol.menu.mouse_config`), Wizard menu, `SEQ` (`seq_view`), Timeline (open source's `movie_panel` until L-17 exists), `>_` output pane. The viewer's own command line is off (`internal_feedback=0`); typing in the viewer goes to the command line | [content_panel.py](modules/pymolx/gui/content_panel.py) | S |
 | L-15 | [~] | Content panel replacing the OpenGL object panel (`internal_gui=0`). Done: rows from the core's panel list (new `_cmd.get_panel_list`, [panel.py](modules/pymolx/panel.py)), enabled dot, click to enable/disable, right-click for actions, A/S/H/L/C menus dispatched per object type as in the OpenGL panel, groups with expand/collapse, long names shortened with "...", menu labels in PyMOL's colors, a wizard panel (controls of the active wizard, e.g. mutagenesis) and a state bar (state stepping, rotamer strain). Open: drag to reorder, rename, multi-select | [content_panel.py](modules/pymolx/gui/content_panel.py), [layer3/Executive.cpp](layer3/Executive.cpp) | L |
 | L-16 | [ ] | Scenes panel: left dock with scene thumbnails, a `...` menu per scene, Save Scene, Add to Timeline (upstream has a Qt scene panel in [scene_bin_gui.py](modules/pmg_qt/scene_bin_gui.py) to build on) | new Qt dock | M |
+| L-18 | [x] | Superposition/Alignment dialog (Plugin menu): many-to-one (`extra_fit`) or one-to-one, method (align, super, cealign, usalign, fit), selections and states, alignment object, outlier rejection, command preview. Bundled plugin | [data/startup/alignment_gui/](data/startup/alignment_gui/) | S |
 | L-17 | [ ] | Timeline: compositions, tracks (camera, objects), keyframes, transport, export, inspector. Large; open source only has the OpenGL movie panel | new Qt dock | L |
 
 ## G. Bundled dependencies and packaging

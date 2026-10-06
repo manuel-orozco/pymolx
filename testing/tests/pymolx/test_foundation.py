@@ -171,3 +171,18 @@ def test_unlocked():
     assert not parity.unlocked(test_id, {'F-01'}.__contains__)
     assert parity.unlocked(test_id, {'F-01', 'F-02'}.__contains__)
     assert not parity.unlocked('api/unmapped.py::Test', lambda item: True)
+
+
+# startup text in the viewer, like Incentive PyMOL
+
+def test_startup_text():
+    cmd.set('text', 0)
+    pymolx.show_startup_text(cmd)
+    assert cmd.get_setting_boolean('text')
+    pymolx.hide_startup_text(cmd)
+    assert not cmd.get_setting_boolean('text')
+    # only once: later "text" changes are the user's
+    cmd.set('text', 1)
+    pymolx.hide_startup_text(cmd)
+    assert cmd.get_setting_boolean('text')
+    cmd.set('text', 0)

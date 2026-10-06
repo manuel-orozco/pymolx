@@ -190,7 +190,7 @@ def test_colored_labels_are_drawn(app):
 def test_toolbar_buttons(window):
     assert [b.text() for b in toolbar_buttons(window)] == [
         'Residues', '', '', 'Zoom', 'Orient', 'Rock', 'Presets...',
-        'Builder...', 'Scenes', 'Draw/Ray', '…']
+        'Builder...', 'Scenes', 'Draw/Ray', '•••']
 
 
 def test_selection_mode(window):
@@ -246,10 +246,10 @@ def test_window_actions(window):
     btns = buttons(window)
     btns['Builder...'].click()
     btns['Scenes'].click()
-    actions(btns['…'].menu())['Get View'].trigger()
-    actions(btns['…'].menu())['Properties...'].trigger()
+    actions(btns['•••'].menu())['Get View'].trigger()
+    actions(btns['•••'].menu())['Properties...'].trigger()
     assert window.calls == ['builder', 'scenes', 'get_view', 'properties']
 
-    movie = actions(btns['…'].menu())['Movie'].menu()
+    movie = actions(btns['•••'].menu())['Movie'].menu()
     assert list(actions(movie)) == [
         'Rewind', 'Backward', 'Stop', 'Play', 'Forward', 'End', 'Clear Movie']

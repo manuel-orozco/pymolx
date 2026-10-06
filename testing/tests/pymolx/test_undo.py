@@ -150,3 +150,10 @@ def test_disabled_keeps_upstream_undo():
     assert steps() == 0
     cmd.undo()  # upstream coordinate undo: no error
     assert cmd.get_names() == ['ala']
+
+
+def test_clear_history():
+    cmd.fragment('ala')
+    cmd.undo()
+    undo.stack.clear_history()
+    assert not undo.stack.can_undo() and not undo.stack.can_redo()
