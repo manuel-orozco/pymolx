@@ -851,6 +851,18 @@ PyMOL> color ye<TAB>    (will autocomplete "yellow")
 
         self.scene_panel_dialog.show()
 
+    def choose_background_color(self):
+        '''
+        Display > Background > Custom...: pick any background color
+        '''
+        index = self.cmd.get_setting_tuple('bg_rgb')[1][0]
+        initial = QtGui.QColor.fromRgbF(*self.cmd.get_color_tuple(index))
+        color = QtWidgets.QColorDialog.getColor(initial, self,
+                                                'Background Color')
+        if color.isValid():
+            self.cmd.bg_color('0x%02x%02x%02x' % (
+                color.red(), color.green(), color.blue()))
+
     def show_about(self):
         branding = pymolx.branding
         msg = [

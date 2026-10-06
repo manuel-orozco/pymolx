@@ -38,6 +38,13 @@ class PyMOLDesktopGUI(object):
     edit_colors_dialog = None
     cd_dialog = None
     show_about = None
+
+    def choose_background_color(self):
+        '''
+        Pick any background color (GUIs with a color dialog override this)
+        '''
+        print(' Use "bg_color" to set any background color, '
+              'e.g.: bg_color 0x00054a')
     shortcut_menu_edit_dialog = None
     scene_panel_dialog = None
 
@@ -459,7 +466,12 @@ class PyMOLDesktopGUI(object):
                         ('Light Grey', 134),    # grey80
                         ('Grey', 104),          # grey50
                         ('Black', 1),           # black
+                        # pymolx: RGB colors are 0x40000000 | 0xRRGGBB
+                        ('Dark Navy', 0x40000000 | 0x00054a),
                     ]
+                ] + [
+                    ('separator',),
+                    ('command', 'Custom...', self.choose_background_color),
                 ]),
                 ('menu', 'Color Space', [
                     ('command', 'CMYK (for publications)',  'space cmyk'),
