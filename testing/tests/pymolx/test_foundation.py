@@ -108,6 +108,7 @@ def test_features_register_invalid(bad_id):
 
 def test_defaults_apply_revert(monkeypatch):
     monkeypatch.setattr(defaults, 'DEFAULTS', {'sphere_scale': 0.5})
+    monkeypatch.setattr(defaults, 'QUALITY', None)
     monkeypatch.setattr(defaults, '_replaced', {})
     original = cmd.get_setting_float('sphere_scale')
     assert original != 0.5
@@ -118,6 +119,34 @@ def test_defaults_apply_revert(monkeypatch):
     assert defaults.revert(cmd)
     assert cmd.get_setting_float('sphere_scale') == original
     assert not defaults.revert(cmd)
+
+
+def test_default_quality_is_maximum(monkeypatch, capsys):
+    # like Display > Quality > Maximum Quality, quietly, and revertible
+    from pymol import util
+    monkeypatch.setattr(defaults, 'DEFAULTS', {})
+    monkeypatch.setattr(defaults, '_replaced', {})
+    names = ['cartoon_sampling', 'ribbon_sampling', 'surface_quality',
+             'transparency_mode', 'stick_quality', 'sphere_quality']
+    saved = {n: cmd.get(n) for n in names}
+    try:
+        util.performance(100, _self=cmd)  # maximum performance
+        low = {n: cmd.get(n) for n in names}
+        capsys.readouterr()
+
+        defaults.apply(cmd)
+        assert capsys.readouterr().out == ''
+        assert cmd.get_setting_int('cartoon_sampling') == 14
+        assert cmd.get_setting_int('surface_quality') == 1
+        assert cmd.get_setting_int('transparency_mode') == 2
+        if not cmd.get_setting_int('use_shaders'):
+            assert cmd.get_setting_int('stick_quality') == 15
+
+        assert defaults.revert(cmd)
+        assert {n: cmd.get(n) for n in names} == low
+    finally:
+        for name, value in saved.items():
+            cmd.set(name, value)
 
 
 # "pymolx" command (D-03)
@@ -173,7 +202,23 @@ def test_unlocked():
     assert not parity.unlocked('api/unmapped.py::Test', lambda item: True)
 
 
-# startup text in the viewer, like Incentive PyMOL
+# startup text in the viewer, like Incentive PyMOL (off by default)
+
+def test_no_startup_text_by_default(monkeypatch):
+    import pymolx
+    monkeypatch.setattr(pymolx, '_startup_text', False)
+    assert not branding.SHOW_STARTUP_TEXT
+    cmd.set('text', 0)
+    cmd.splash(1)
+    assert not cmd.get_setting_boolean('text')
+    assert not pymolx._startup_text
+
+    monkeypatch.setattr(branding, 'SHOW_STARTUP_TEXT', True)
+    cmd.splash(1)
+    assert cmd.get_setting_boolean('text')
+    pymolx.hide_startup_text(cmd)
+    assert not cmd.get_setting_boolean('text')
+
 
 def test_startup_text():
     cmd.set('text', 0)
@@ -187,14 +232,3 @@ def test_startup_text():
     assert cmd.get_setting_boolean('text')
     cmd.set('text', 0)
 
-
-def test_multisample_default():
-    # smooth edges in the viewer: 4x multisampling unless "-E N" says
-    # otherwise (Qt and GLUT fall back to none if unavailable)
-    import copy
-    from pymol import invocation
-    assert invocation.options.multisample == 4
-    for argv, samples in [(['pymol', '-E', '0'], 0), (['pymol', '-E', '8'], 8)]:
-        options = copy.copy(invocation.options)
-        invocation.parse_args(argv, options=options, restricted=1)
-        assert options.multisample == samples

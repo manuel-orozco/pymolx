@@ -57,7 +57,11 @@ used in code and commits: [INCENTIVE_PARITY.md](INCENTIVE_PARITY.md).
 - Theme: colors only in `COLORS` (`modules/pymolx/gui/theme.py`), used as
   `$name` in `data/pymolx/styles/dark.qss` (literal `$` must be `$$`).
   Icons: `data/pymolx/icons/*.svg` (own artwork; `<name>-on.svg` = checked).
-  Console font: `theme.CONSOLE_FONTS` (Consolas first, with fallbacks).
+  Font size: `theme.FONT_SIZE` (11 pt) for all GUI text: application
+  font, `$font_size` in the stylesheet, console font. Console font
+  (output, command line, sequence viewer): `theme.console_font()`,
+  first of `theme.CONSOLE_FONTS` (DejaVu Sans Mono), sized so its letters
+  are as tall as the interface font's. No bold text except titles.
 - Menus from `pymol.menu` data: `pymolx.gui.menus.PyMenu` + `fill_menu`
   (draws PyMOL color codes like `\900`).
 - Main window parts: toolbar (`gui/toolbar.py`), content panel with
@@ -85,6 +89,11 @@ used in code and commits: [INCENTIVE_PARITY.md](INCENTIVE_PARITY.md).
   colors or selections may have changed. Queries on a selection
   expression create temporary selections and bump "dirty" themselves:
   re-read the counters after your own queries.
+- `sendEvent` mouse events don't drag `QMainWindow` separators in the
+  real GUI (they do offscreen); drive such drags with `QTest`.
+- Plugin preferences (`~/.pymolpluginsrc.py`, `plugins.pref_get`) are
+  read after the main window is built: read them again from a
+  `QTimer.singleShot(0, ...)` set up during window setup.
 - Kill test processes by PID, never `pkill -f` with a pattern that
   matches your own shell command.
 
@@ -93,7 +102,8 @@ used in code and commits: [INCENTIVE_PARITY.md](INCENTIVE_PARITY.md).
 - Explain in plain language; show what was verified (tests, screenshots).
 - Don't commit or push unless asked; the owner usually commits to
   `master` directly. Keep build artifacts and downloads out of the repo.
-- Decisions already made: keep ESC text/graphics toggle and the startup
-  text in the viewer (like Incentive); Display > Background has Dark Navy
+- Decisions already made: keep the ESC text/graphics toggle, but no
+  startup text in the viewer (`branding.SHOW_STARTUP_TEXT`); Display > Background has Dark Navy
   `#000430` and Custom...; `interface_analysis` ΔiG is calibrated to PISA;
-  4× multisampling by default (`options.multisample`, `-E 0` = off).
+  Display > Quality > Maximum Quality is the default (`defaults.QUALITY`);
+  no default multisampling (tried, didn't help).

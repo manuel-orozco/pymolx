@@ -354,6 +354,8 @@ def fire_setting_callbacks(win):
 
 
 def process():
+    # twice: layouts settle, then zero timers (dock height correction) run
+    QtWidgets.QApplication.processEvents()
     QtWidgets.QApplication.processEvents()
 
 
@@ -649,7 +651,6 @@ def test_row_layout_by_object(window):
 
 @needs_qt
 def test_label_width_drag(window):
-    from pymolx.gui.sequence_viewer import PREF_LABEL_WIDTH
     viewer = window.sequence_viewer
     vp = viewer.viewport()
     cmd.fab('ACDEF', 'p')
@@ -662,7 +663,8 @@ def test_label_width_drag(window):
     mouse(vp, 'move', QtCore.QPoint(auto + 60, y))
     assert viewer._label_width() == auto + 60
     mouse(vp, 'release', QtCore.QPoint(auto + 60, y))
-    assert window.prefs[PREF_LABEL_WIDTH] == auto + 60
+    assert viewer.label_width == auto + 60
+    assert not [k for k in window.prefs if 'width' in k]  # this run only
     assert sequence.get_selected() == set()  # no residue clicked
     # cells move with the label column
     assert viewer.residue_rect(viewer.rows[0],
@@ -677,20 +679,245 @@ def test_label_width_drag(window):
     # double-click on the edge fits the labels again
     mouse(vp, 'double', QtCore.QPoint(viewer._label_width(), y))
     assert viewer.label_width is None
-    assert window.prefs[PREF_LABEL_WIDTH] is None
     assert viewer._label_width() == auto
 
 
 @needs_qt
 def test_layout_prefs_are_loaded(app):
     from pymolx.gui import sequence_viewer as sv
+    # a width saved by an earlier version is not used: labels fit
     prefs = sv.MemoryPrefs({sv.PREF_BY_OBJECT: True,
-                            sv.PREF_LABEL_WIDTH: 150})
+                            'pymolx_seq_label_width': 150})
     viewer = sv.SequenceViewer(cmd, prefs=prefs)
     viewer.timer.stop()
     viewer.resize(800, 100)
     two_chains()
     viewer.set_shown(True)
     assert [row.label for row in viewer.rows] == ['p']
-    assert viewer._label_width() == 150
+    assert viewer.label_width is None
     viewer.deleteLater()
+
+
+def wheel(widget, dy, modifiers=None):
+    Qt = QtCore.Qt
+    pos = QtCore.QPointF(widget.width() / 2, widget.height() / 2)
+    event = QtGui.QWheelEvent(
+        pos, widget.mapToGlobal(pos), QtCore.QPoint(0, 0),
+        QtCore.QPoint(0, dy), Qt.MouseButton.NoButton,
+        modifiers or Qt.KeyboardModifier.NoModifier,
+        Qt.ScrollPhase.NoScrollPhase, False)
+    QtWidgets.QApplication.sendEvent(widget, event)
+
+
+@needs_qt
+def test_font_size_ctrl_wheel(window):
+    from pymolx.gui import sequence_viewer as sv
+    from pymolx.gui import theme
+    ctrl = QtCore.Qt.KeyboardModifier.ControlModifier
+    viewer = window.sequence_viewer
+    vp = viewer.viewport()
+    cmd.fab('ACDEFGHIKLMNPQRSTVWY' * 10, 'p')
+    viewer.set_shown(True)
+    process()
+    size = viewer.font_size
+    assert size == theme.FONT_SIZE
+    row_h, char_w, height = viewer.row_h, viewer.char_w, viewer.height()
+
+    wheel(vp, 240, ctrl)  # two notches up
+    process()
+    assert viewer.font_size == size + 2
+    assert not [k for k in window.prefs if 'font' in k]  # this run only
+    assert viewer.row_h > row_h and viewer.char_w > char_w
+    assert viewer.height() > height  # the panel grows with the rows
+
+    wheel(vp, -120, ctrl)
+    assert viewer.font_size == size + 1
+    for _ in range(4):  # touchpad: quarter notches add up
+        wheel(vp, -30, ctrl)
+    assert viewer.font_size == size
+
+    wheel(vp, -120 * 50, ctrl)
+    assert viewer.font_size == sv.FONT_SIZES[0]
+    wheel(vp, 120 * 50, ctrl)
+    assert viewer.font_size == sv.FONT_SIZES[1]
+
+    wheel(vp, 120)  # no Ctrl: scrolls, font unchanged
+    assert viewer.font_size == sv.FONT_SIZES[1]
+
+
+@needs_qt
+def test_font_size_keeps_position_and_label_width(window):
+    viewer = window.sequence_viewer
+    cmd.fab('ACDEFGHIKLMNPQRSTVWY' * 10, 'p')
+    viewer.set_shown(True)
+    process()
+    row = viewer.rows[0]
+    viewer.set_font_size(8)  # doubled below, within FONT_SIZES
+    viewer.set_label_width(120)
+    hbar = viewer.horizontalScrollBar()
+    hbar.setValue(100 * viewer.char_w)
+    left_col = hbar.value() // viewer.char_w
+
+    char_w = viewer.char_w
+    viewer.set_font_size(viewer.font_size * 2)
+    assert abs(hbar.value() // viewer.char_w - left_col) <= 1
+    # the dragged width follows the (whole pixel) character width
+    assert viewer.label_width == pytest.approx(
+        120 * viewer.char_w / char_w, abs=1)
+    assert viewer.char_w > char_w
+    assert viewer.residue_rect(row, row.residues[0]).height() == \
+        viewer.line_h
+
+
+@needs_qt
+def test_font_size_menu(window):
+    from pymolx.gui import theme
+    viewer = window.sequence_viewer
+    cmd.fab('ACD', 'p')
+    viewer.set_shown(True)
+
+    def actions():
+        return {a.text(): a for a in viewer.layout_menu().actions()}
+
+    default = 'Default Font Size (%d pt)' % theme.FONT_SIZE
+    assert not actions()[default].isEnabled()
+    actions()['Larger Font'].trigger()
+    actions()['Larger Font'].trigger()
+    assert viewer.font_size == theme.FONT_SIZE + 2
+    actions()['Smaller Font'].trigger()
+    assert viewer.font_size == theme.FONT_SIZE + 1
+    actions()[default].trigger()
+    assert viewer.font_size == theme.FONT_SIZE
+
+
+@needs_qt
+def test_font_size_matches_gui(app):
+    # saved sizes from earlier versions are ignored: GUI's size, and the
+    # monospace letters as tall as the interface font's
+    from pymolx.gui import sequence_viewer as sv
+    prefs = sv.MemoryPrefs({'pymolx_seq_font_size': 9})
+    viewer = sv.SequenceViewer(cmd, prefs=prefs)
+    viewer.timer.stop()
+    assert viewer.font_size == sv.theme.FONT_SIZE
+    ui = QtGui.QFont(QtWidgets.QApplication.font())
+    ui.setPointSizeF(sv.theme.FONT_SIZE)
+    cap = QtGui.QFontMetricsF(viewer.font()).capHeight()
+    assert cap == pytest.approx(QtGui.QFontMetricsF(ui).capHeight(), abs=1)
+    viewer.deleteLater()
+
+
+def chains(n, name='p'):
+    letters = 'ABCDEFGH'[:n]
+    for i, chain in enumerate(letters):
+        cmd.fab('ACDEFGHIKL', '_part%d' % i, chain=chain)
+    cmd.create(name, ' '.join('_part%d' % i for i in range(n)))
+    cmd.delete('_part*')
+
+
+@needs_qt
+def test_label_column_fits_long_names(window):
+    viewer = window.sequence_viewer
+    chains(2, 'migg1_fc_g0f_proteinA')
+    viewer.set_shown(True)
+    process()
+    fm = QtGui.QFontMetrics(viewer.font())
+    label_w = viewer._label_width()
+    for row in viewer.rows:
+        assert fm.horizontalAdvance(row.label) <= label_w - 2 * 4
+
+    # absurdly long names: the cells keep most of the width
+    cmd.set_name('migg1_fc_g0f_proteinA', 'x' * 150)
+    viewer.refresh()
+    assert viewer._label_width() <= viewer.viewport().width() * 0.5 + 1
+
+
+@needs_qt
+def test_default_height_three_rows(window):
+    viewer = window.sequence_viewer
+    chains(2)
+    viewer.set_shown(True)
+    process()
+    assert viewer.height() == viewer.rows_height(2)
+
+    chains(5)
+    viewer.refresh()
+    process()
+    assert len(viewer.rows) == 5
+    assert viewer.height() == viewer.rows_height(3)
+    assert viewer.verticalScrollBar().maximum() > 0
+    lo, hi = viewer.height_limits()
+    assert viewer.minimumHeight() == lo == viewer.rows_height(1)
+    assert hi == viewer.rows_height(5)
+    # at most a dock separator's width of slack
+    separator = window.style().pixelMetric(
+        QtWidgets.QStyle.PixelMetric.PM_DockWidgetSeparatorExtent, None,
+        window)
+    assert viewer.maximumHeight() - hi == separator
+
+
+def separator_drag(win, dock, dy):
+    '''drag the edge between the dock and the central widget'''
+    Qt = QtCore.Qt
+    x = dock.geometry().center().x()
+    y = (dock.geometry().bottom() + win.centralWidget().geometry().top()) // 2
+    for kind, pos, buttons in [
+            (QtCore.QEvent.Type.MouseButtonPress, y, Qt.MouseButton.LeftButton),
+            (QtCore.QEvent.Type.MouseMove, y + dy // 2, Qt.MouseButton.LeftButton),
+            (QtCore.QEvent.Type.MouseMove, y + dy, Qt.MouseButton.LeftButton),
+            (QtCore.QEvent.Type.MouseButtonRelease, y + dy, Qt.MouseButton.NoButton)]:
+        p = QtCore.QPointF(x, pos)
+        event = QtGui.QMouseEvent(kind, p, win.mapToGlobal(p),
+                                  Qt.MouseButton.LeftButton, buttons,
+                                  Qt.KeyboardModifier.NoModifier)
+        QtWidgets.QApplication.sendEvent(win, event)
+        process()
+
+
+@needs_qt
+def test_user_resizes_height(window):
+    viewer = window.sequence_viewer
+    chains(5)
+    viewer.set_shown(True)
+    process()
+    three = viewer.rows_height(3)
+    assert viewer.height() == three
+
+    separator_drag(window, window.sequence_dock, viewer.row_h)
+    assert viewer.height() > three
+    assert viewer.user_height == viewer.height()
+    user = viewer.height()
+
+    # kept while the rows change; never more than all rows
+    cmd.delete('p')
+    chains(4)
+    viewer.refresh()
+    process()
+    assert viewer.height() == min(user, viewer.rows_height(4))
+
+    # back to the default
+    menu = {a.text(): a for a in viewer.layout_menu().actions()}
+    menu['Default Height (3 Rows)'].trigger()
+    process()
+    assert viewer.user_height is None
+    assert viewer.height() == viewer.rows_height(3)
+
+
+@needs_qt
+def test_prefs_read_after_window_setup(window):
+    # PyMOL reads ~/.pymolpluginsrc.py after the window is built: saved
+    # values that show up later still apply, without being saved again
+    from pymolx.gui import sequence_viewer as sv
+    viewer = window.sequence_viewer
+    assert not viewer.by_object
+    window.prefs.update({sv.PREF_BY_OBJECT: True})
+    process()  # setup's deferred load_prefs has run already
+    viewer.load_prefs()
+    assert viewer.by_object
+    assert window.sequence_layout_actions[True].isChecked()
+
+    class Watch(sv.MemoryPrefs):
+        def set(self, key, value):
+            raise AssertionError('saved %s' % key)
+
+    viewer.prefs = Watch(window.prefs)
+    viewer.load_prefs()  # loading again doesn't save anything

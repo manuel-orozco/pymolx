@@ -11,8 +11,12 @@ selection menu, double-click empty space to clear the selection.
 
 Rows are chains, or objects with their chains side by side like the
 OpenGL viewer (right-click the label column, or Display > Sequence
-Mode). The label column's right edge can be dragged; double-click it to
-fit the labels again. Both choices are kept in the plugin preferences.
+Mode). The label column fits the longest name; its right edge can be
+dragged (double-click it to fit again). The panel starts three rows high;
+its bottom edge can be dragged too. Ctrl + mouse wheel (or the same
+right-click menu) changes the font size. The row layout is kept in the
+plugin preferences; sizes go back to these defaults at each start (all
+GUI text: theme.FONT_SIZE).
 
 The SEQ toggle and Display > Sequence show this viewer instead of the
 OpenGL one; "set seq_view, 1" does the same (the setting is put back to
@@ -20,6 +24,7 @@ OpenGL one; "set seq_view, 1" does the same (the setting is put back to
 '''
 
 import contextlib
+import math
 
 from pymol.Qt import QtCore, QtGui, QtWidgets
 from pymol import menu as pymol_menu
@@ -30,15 +35,17 @@ from . import menus, theme
 Qt = QtCore.Qt
 
 REFRESH_MS = 150
-MAX_VISIBLE_ROWS = 6
-LABEL_MAX_CHARS = 14
+DEFAULT_VISIBLE_ROWS = 3  # initial height; more rows scroll
+LABEL_MAX_FRACTION = 0.5  # fitted label column: at most this of the width
 PAD = 4        # pixels around the cell area
 ROW_GAP = 3    # pixels between rows
 MENU_SELE = '_seqview_menu'
 DIVIDER_GRAB = 3  # pixels either side of the label column edge
 
 PREF_BY_OBJECT = 'pymolx_seq_by_object'
-PREF_LABEL_WIDTH = 'pymolx_seq_label_width'
+
+FONT_SIZES = (6, 24)  # points, smallest and largest
+WHEEL_STEP = 120      # angleDelta of one wheel notch: one point
 
 LAYOUT_LABELS = [(False, 'One Row per Chain'),
                  (True, 'One Row per Object (Chains Side by Side)')]
@@ -92,10 +99,16 @@ class SequenceViewer(QtWidgets.QAbstractScrollArea):
         self.cmd = cmd
         self.prefs = prefs if prefs is not None else MemoryPrefs()
         self.by_object = bool(self.prefs.get(PREF_BY_OBJECT, False))
-        # pixels, or None to fit the labels
-        self.label_width = self.prefs.get(PREF_LABEL_WIDTH, None)
+        # pixels set by the user, or None: fit the labels / default rows
+        self.label_width = None
+        self.user_height = None
+        self.height_handler = None  # callable(height); default: resize
+        # extra maximum height the container needs (dock area separator)
+        self.height_slack = 0
+        self._requested_height = None
         self._resizing_label = False
         self._divider_hover = False
+        self._wheel_zoom = 0  # touchpads send fractions of a notch
         self.setObjectName('sequence_viewer')
         self.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
@@ -112,8 +125,10 @@ class SequenceViewer(QtWidgets.QAbstractScrollArea):
         self._drag_last = None     # residue index the drag is at
         self._anchor = None        # (row key, index, add) for shift-click
 
-        font = theme.console_font()
-        self.setFont(font)
+        # points, like the interface font (the monospace font itself is
+        # sized to match it: see theme.console_font)
+        self._font_size = theme.FONT_SIZE
+        self.setFont(theme.console_font(size=self._font_size))
         self._set_metrics()
 
         self.timer = QtCore.QTimer(self)
@@ -122,9 +137,57 @@ class SequenceViewer(QtWidgets.QAbstractScrollArea):
 
     # geometry
 
+    @property
+    def font_size(self):
+        return self._font_size
+
+    def set_font_size(self, size):
+        '''
+        Font size in points (clamped to FONT_SIZES), for this session;
+        None for the GUI's size (theme.FONT_SIZE). Rows, numbers and
+        labels scale with it; sizes set by the user too. The residue at
+        the left edge stays there.
+        '''
+        size = self._clamp_font_size(size)
+        if size == self._font_size:
+            return
+        hbar = self.horizontalScrollBar()
+        left_col = hbar.value() / self.char_w
+        old_char_w, old_row_h = self.char_w, self.row_h
+        self._font_size = size
+        self.setFont(theme.console_font(size=size))
+        self._set_metrics()
+        # clamped when used, not here
+        if self.label_width:
+            self.label_width = round(self.label_width * self.char_w /
+                                     old_char_w)
+        if self.user_height:
+            self.user_height = round(self.user_height * self.row_h /
+                                     old_row_h)
+        self._update_scrollbars()
+        hbar.setValue(round(left_col * self.char_w))
+        self.viewport().update()
+
+    def load_prefs(self):
+        '''
+        Apply the saved row layout. The GUI calls this again once PyMOL
+        has read the plugin preferences file, which happens after the
+        window is built.
+        '''
+        self.set_by_object(self.prefs.get(PREF_BY_OBJECT, False), save=False)
+
+    @staticmethod
+    def _clamp_font_size(size):
+        if size is None:
+            return theme.FONT_SIZE
+        return int(min(max(size, FONT_SIZES[0]), FONT_SIZES[1]))
+
     def _set_metrics(self):
         fm = QtGui.QFontMetrics(self.font())
-        self.char_w = max(1, fm.horizontalAdvance('W'))
+        # rounded up: the font scales smoothly (fractional widths), and
+        # cells and labels must hold their text
+        self.char_w = max(1, math.ceil(
+            QtGui.QFontMetricsF(self.font()).horizontalAdvance('W')))
         self.line_h = fm.height()
         self.row_h = 2 * self.line_h + ROW_GAP
         self.ascent = fm.ascent()
@@ -132,9 +195,12 @@ class SequenceViewer(QtWidgets.QAbstractScrollArea):
     def _label_width(self):
         if self.label_width:
             return self._clamp_label_width(self.label_width)
-        # one character of slack: char_w is rounded down
+        # fit the longest label (and one character of space), but leave
+        # most of the width to the cells
         chars = max([len(row.label) for row in self.rows] + [4])
-        return (min(chars, LABEL_MAX_CHARS) + 1) * self.char_w + 2 * PAD
+        width = (chars + 1) * self.char_w + 2 * PAD
+        limit = int(self.viewport().width() * LABEL_MAX_FRACTION)
+        return min(width, max(limit, 3 * self.char_w + 2 * PAD))
 
     def _clamp_label_width(self, width):
         # at least a few characters, and room left for the cells
@@ -142,21 +208,19 @@ class SequenceViewer(QtWidgets.QAbstractScrollArea):
         hi = max(lo, self.viewport().width() - 10 * self.char_w)
         return int(min(max(width, lo), hi))
 
-    def set_label_width(self, width, save=True):
+    def set_label_width(self, width):
         '''
         :param width: pixels, or None to fit the labels
         '''
         self.label_width = (None if width is None else
                             self._clamp_label_width(width))
-        if save:
-            self.prefs.set(PREF_LABEL_WIDTH, self.label_width)
         self._update_scrollbars()
         self.viewport().update()
 
     def _on_divider(self, x):
         return abs(x - self._label_width()) <= DIVIDER_GRAB
 
-    def set_by_object(self, by_object):
+    def set_by_object(self, by_object, save=True):
         '''
         One row per object, chains side by side (True), or one row per
         chain (False)
@@ -164,7 +228,8 @@ class SequenceViewer(QtWidgets.QAbstractScrollArea):
         by_object = bool(by_object)
         if by_object != self.by_object:
             self.by_object = by_object
-            self.prefs.set(PREF_BY_OBJECT, by_object)
+            if save:
+                self.prefs.set(PREF_BY_OBJECT, by_object)
             self._anchor = None
             if self.shown:
                 self.refresh(force=True)
@@ -172,7 +237,7 @@ class SequenceViewer(QtWidgets.QAbstractScrollArea):
 
     def layout_menu(self, parent=None):
         '''
-        Menu with the row layouts and "Fit Label Width"
+        Menu with the row layouts, "Fit Label Width" and the font size
         '''
         menu = QtWidgets.QMenu(parent or self)
         group = QtWidgets.QActionGroup(menu)
@@ -187,6 +252,22 @@ class SequenceViewer(QtWidgets.QAbstractScrollArea):
         action = menu.addAction('Fit Label Width')
         action.setEnabled(bool(self.label_width))
         action.triggered.connect(lambda: self.set_label_width(None))
+        action = menu.addAction('Default Height (%d Rows)' %
+                                DEFAULT_VISIBLE_ROWS)
+        action.setEnabled(bool(self.user_height))
+        action.triggered.connect(lambda: self.set_user_height(None))
+        menu.addSeparator()
+        size = self.font_size
+        for label, new_size in [('Larger Font', size + 1),
+                                ('Smaller Font', size - 1),
+                                ('Default Font Size (%d pt)' %
+                                 theme.FONT_SIZE, None)]:
+            action = menu.addAction(label)
+            target = theme.FONT_SIZE if new_size is None else new_size
+            action.setEnabled(FONT_SIZES[0] <= target <= FONT_SIZES[1] and
+                              target != size)
+            action.triggered.connect(
+                lambda _=False, n=new_size: self.set_font_size(n))
         return menu
 
     def content_width(self):
@@ -196,23 +277,63 @@ class SequenceViewer(QtWidgets.QAbstractScrollArea):
     def _cells_width(self):
         return max(1, self.viewport().width() - self._label_width())
 
-    def preferred_height(self):
+    def rows_height(self, nrows):
         '''
-        Height for all rows (at most MAX_VISIBLE_ROWS) plus the
-        horizontal scroll bar if the cells don't fit.
+        Height showing nrows rows (at least one), plus the horizontal
+        scroll bar if the cells don't fit
         '''
-        nrows = max(1, min(len(self.rows), MAX_VISIBLE_ROWS))
-        height = nrows * self.row_h + 2 * PAD - ROW_GAP
-        frame = self.width() - self.viewport().width()
-        if len(self.rows) > MAX_VISIBLE_ROWS:
-            frame = self.verticalScrollBar().sizeHint().width()
-        label_w = self._label_width()
-        if self.content_width() > self.width() - frame - label_w:
+        height = max(1, nrows) * self.row_h + 2 * PAD - ROW_GAP
+        vbar = self.verticalScrollBar()
+        frame = vbar.sizeHint().width() if vbar.isVisible() else 0
+        if self.content_width() > self.width() - frame - self._label_width():
             height += self.horizontalScrollBar().sizeHint().height()
         return height
 
+    def height_limits(self):
+        '''
+        (min, max): one row up to all rows, so the user can't open empty
+        space below them
+        '''
+        return self.rows_height(1), self.rows_height(len(self.rows))
+
+    def target_height(self):
+        '''
+        The user's height, else DEFAULT_VISIBLE_ROWS rows; within
+        height_limits
+        '''
+        lo, hi = self.height_limits()
+        height = self.user_height or self.rows_height(
+            min(len(self.rows), DEFAULT_VISIBLE_ROWS))
+        return min(max(height, lo), hi)
+
+    def set_user_height(self, height):
+        '''
+        :param height: pixels (e.g. after the user dragged the panel's
+            edge), or None for the default height
+        '''
+        self.user_height = height
+        self._update_height()
+
     def sizeHint(self):
-        return QtCore.QSize(400, self.preferred_height())
+        return QtCore.QSize(400, self.target_height())
+
+    def _update_height(self):
+        lo, hi = self.height_limits()
+        hi += self.height_slack
+        if (lo, hi) != (self.minimumHeight(), self.maximumHeight()):
+            self.setMinimumHeight(lo)
+            self.setMaximumHeight(hi)
+        target = self.target_height()
+        if target == self.height():
+            self._requested_height = target
+        elif target != self._requested_height:
+            # once per target: never fight a drag in progress, nor loop if
+            # the window can't give the height
+            self._requested_height = target
+            if self.height_handler is not None:
+                self.height_handler(target)
+            else:
+                self.resize(self.width(), target)
 
     def _update_scrollbars(self):
         hbar = self.horizontalScrollBar()
@@ -225,9 +346,7 @@ class SequenceViewer(QtWidgets.QAbstractScrollArea):
         vbar.setRange(0, max(0, total - self.viewport().height()))
         vbar.setPageStep(self.viewport().height())
         vbar.setSingleStep(self.row_h)
-        height = self.preferred_height()
-        if self.height() != height:
-            self.setFixedHeight(height)
+        self._update_height()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -330,6 +449,9 @@ class SequenceViewer(QtWidgets.QAbstractScrollArea):
             target = self
         if target.isHidden() == visible:
             target.setVisible(visible)
+            if visible:
+                self._requested_height = None
+                self._update_height()
 
     def qcolor(self, index):
         color = self._colors.get(index)
@@ -482,7 +604,7 @@ class SequenceViewer(QtWidgets.QAbstractScrollArea):
     def mouseMoveEvent(self, event):
         pos = _event_pos(event)
         if self._resizing_label:
-            self.set_label_width(pos.x(), save=False)
+            self.set_label_width(pos.x())
             return
         if self._drag is None:
             hover = self._on_divider(pos.x())
@@ -552,6 +674,15 @@ class SequenceViewer(QtWidgets.QAbstractScrollArea):
 
     def wheelEvent(self, event):
         delta = event.angleDelta()
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            # Ctrl + wheel: font size, one point per notch
+            self._wheel_zoom += delta.y() or delta.x()
+            steps = int(self._wheel_zoom / WHEEL_STEP)
+            if steps:
+                self._wheel_zoom -= steps * WHEEL_STEP
+                self.set_font_size(self.font_size + steps)
+            event.accept()
+            return
         vbar = self.verticalScrollBar()
         shift = event.modifiers() & Qt.KeyboardModifier.ShiftModifier
         if delta.x() == 0 and (vbar.maximum() == 0 or shift):
@@ -613,6 +744,36 @@ class SequenceViewer(QtWidgets.QAbstractScrollArea):
         return menu
 
 
+class _EdgeDragWatcher(QtCore.QObject):
+    '''
+    Notices the user dragging the dock's edge (the main window's
+    separators get the mouse events themselves) and keeps that height.
+    '''
+
+    def __init__(self, window, viewer):
+        super().__init__(window)
+        self.viewer = viewer
+        self.start = None
+
+    def eventFilter(self, obj, event):
+        if obj is self.parent():
+            kind = event.type()
+            if kind == QtCore.QEvent.Type.MouseButtonPress:
+                self.start = self.viewer.height()
+            elif (kind == QtCore.QEvent.Type.MouseButtonRelease and
+                  self.start is not None):
+                # the window applies the drag after this filter has seen
+                # the release (fully, if the style resizes on release)
+                QtCore.QTimer.singleShot(0, self._dropped)
+        return False
+
+    def _dropped(self):
+        viewer = self.viewer
+        if viewer.isVisible() and viewer.height() != self.start:
+            viewer.set_user_height(viewer.height())
+        self.start = None
+
+
 def _add_layout_actions(menu, viewer):
     '''
     Row layout choices at the end of Display > Sequence Mode
@@ -656,6 +817,36 @@ def setup(window, prefs=None):
                      Qt.DockWidgetArea.RightDockWidgetArea)
     window.addDockWidget(Qt.DockWidgetArea.TopDockWidgetArea, dock)
     dock.hide()
+
+    watcher = window.sequence_edge_watcher = _EdgeDragWatcher(window, viewer)
+    window.installEventFilter(watcher)
+
+    # the dock area's size can include its separator: room for it at
+    # the largest height
+    separator = window.style().pixelMetric(
+        QtWidgets.QStyle.PixelMetric.PM_DockWidgetSeparatorExtent, None,
+        window)
+    viewer.height_slack = separator
+
+    def resize_dock(height):
+        frame = dock.height() - viewer.height() if dock.isVisible() else 0
+        window.resizeDocks([dock], [height + frame], Qt.Orientation.Vertical)
+
+        # the dock can still end up a separator's width off: correct once
+        # after the layout settled, never during a drag of the edge
+        def check():
+            error = height - viewer.height()
+            if error and watcher.start is None and dock.isVisible():
+                window.resizeDocks([dock], [height + frame + error],
+                                   Qt.Orientation.Vertical)
+
+        QtCore.QTimer.singleShot(0, check)
+
+    viewer.height_handler = resize_dock
+
+    # saved preferences are read after the window is built (plugin
+    # initialization), before the event loop runs
+    QtCore.QTimer.singleShot(0, viewer.load_prefs)
 
     toggles = []
     content_panel = getattr(window, 'content_panel', None)

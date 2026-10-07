@@ -142,6 +142,8 @@ class PyMOLQtGUI(QtWidgets.QMainWindow, pymol._gui.PyMOLDesktopGUI):
 
         # Font
         self.browser.setFont(pymolx.gui.theme.console_font())
+        # pymolx: same font on the command line
+        self.lineedit.setFont(pymolx.gui.theme.console_font())
         connectFontContextMenu(self.browser)
 
         lineeditlayout = QtWidgets.QHBoxLayout()

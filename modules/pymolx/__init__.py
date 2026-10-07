@@ -19,9 +19,10 @@ def _init(_self):
     Called once from pymol/__init__.py after the "cmd" module is set up.
     Feature modules which replace Incentive-only stubs get imported here.
     '''
-    from . import info, undo, interfaces, mm
+    from . import info, undo, interfaces, mm, lighting
     info.extend(_self)
     mm.extend(_self)  # before undo.install: one undo step per call
+    lighting.extend(_self)
     undo.install(_self)
     _self.extend('interface_analysis', interfaces.interface_analysis)
     _self.interface_analysis = interfaces.interface_analysis

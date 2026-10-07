@@ -32,11 +32,15 @@ COLORS = {
     'all_c': '#54bd41',
 }
 
-# output pane font: first installed family wins (Consolas is a Microsoft
-# font, so it isn't installed everywhere)
-CONSOLE_FONTS = ['Consolas', 'Cascadia Mono', 'Inconsolata',
-                 'DejaVu Sans Mono']
-CONSOLE_FONT_SIZE = 9  # points
+# all GUI text (menus, toolbars, panels, dialogs, output, command line,
+# sequence viewer), in points
+FONT_SIZE = 11
+
+# output pane, command line and sequence viewer font: first installed
+# family wins (DejaVu Sans Mono comes with most Linux systems; the others
+# are fallbacks for Windows and macOS)
+CONSOLE_FONTS = ['DejaVu Sans Mono', 'Consolas', 'Cascadia Mono',
+                 'Inconsolata']
 
 STYLESHEET_PATH = '$PYMOL_DATA/pymolx/styles/dark.qss'
 ICON_DIR = '$PYMOL_DATA/pymolx/icons'
@@ -44,7 +48,8 @@ ICON_DIR = '$PYMOL_DATA/pymolx/icons'
 
 def stylesheet(_self):
     '''
-    The theme stylesheet with color and "$icons" tokens substituted.
+    The theme stylesheet with color, "$icons" and "$font_size" tokens
+    substituted.
 
     :raises KeyError: if the stylesheet uses an unknown token
     '''
@@ -52,7 +57,8 @@ def stylesheet(_self):
         template = string.Template(handle.read())
     # Qt stylesheet urls need forward slashes, also on Windows
     icons = _self.exp_path(ICON_DIR).replace('\\', '/')
-    return template.substitute(COLORS, icons=icons)
+    return template.substitute(COLORS, icons=icons,
+                               font_size='%dpt' % FONT_SIZE)
 
 
 def palette():
@@ -94,14 +100,17 @@ def palette():
     return pal
 
 
-def console_font(families=None):
+def console_font(families=None, size=None):
     '''
-    QFont for the output pane: the first installed family of
-    CONSOLE_FONTS, else the system monospace font.
+    QFont for the output pane, command line and sequence viewer: the
+    first installed family of CONSOLE_FONTS, else the system monospace
+    font. Its letters are as tall as the interface font's at the same
+    size (monospace fonts run larger), so all text looks the same size.
 
     :param families: installed families (default: ask Qt)
+    :param size: points, as for the interface font (default: FONT_SIZE)
     '''
-    from pymol.Qt import QtGui
+    from pymol.Qt import QtGui, QtWidgets
     if families is None:
         try:
             families = QtGui.QFontDatabase.families()    # Qt 6
@@ -109,18 +118,41 @@ def console_font(families=None):
             families = QtGui.QFontDatabase().families()  # Qt 5
     installed = set(families)
     family = next((f for f in CONSOLE_FONTS if f in installed), 'Monospace')
-    font = QtGui.QFont(family, CONSOLE_FONT_SIZE)
+    size = size or FONT_SIZE
+    font = QtGui.QFont(family)
     font.setStyleHint(QtGui.QFont.StyleHint.Monospace)
+    # scale exactly: hinting snaps letter heights to a few pixel sizes
+    # (DejaVu's capitals jump from 10 to 12 px around 11 pt)
+    font.setHintingPreference(QtGui.QFont.HintingPreference.PreferNoHinting)
+    ui = QtGui.QFont(QtWidgets.QApplication.font())
+    # the fonts' design ratio, at a size where pixel rounding is negligible
+    for f in (ui, font):
+        f.setPointSizeF(100)
+    font.setPointSizeF(round(size * _letter_height(ui) /
+                             _letter_height(font), 1))
     return font
+
+
+def _letter_height(font):
+    from pymol.Qt import QtGui
+    metrics = QtGui.QFontMetricsF(font)
+    if hasattr(metrics, 'capHeight'):  # Qt 6
+        return metrics.capHeight()
+    return metrics.xHeight()
 
 
 def apply(app, window, _self):
     '''
-    Apply the theme: Fusion style and palette on the application, the
-    stylesheet on the main window (appended to any existing one).
+    Apply the theme: Fusion style, palette and FONT_SIZE on the
+    application, the stylesheet on the main window (appended to any
+    existing one).
     '''
+    from pymol.Qt import QtGui
     app.setStyle('Fusion')
     app.setPalette(palette())
+    font = QtGui.QFont(app.font())
+    font.setPointSize(FONT_SIZE)
+    app.setFont(font)
     window.setStyleSheet(window.styleSheet() + '\n' + stylesheet(_self))
 
 

@@ -13,18 +13,43 @@ DEFAULTS = {
     # 'setting_name': value,
 }
 
+# Display > Quality level (util.performance mode) applied before DEFAULTS:
+# 0 = Maximum Quality (owner's choice), None = leave PyMOL's defaults.
+# Depends on use_shaders, so it runs after the graphics are detected.
+QUALITY = 0
+
 # values replaced by apply(), so revert() can restore them
 _replaced = {}
 
 
 def apply(_self):
     '''
-    Apply DEFAULTS. Called from pymol.adapt_to_hardware() right before
-    the adapted state is stored with "reinitialize store".
+    Apply QUALITY, then DEFAULTS. Called from pymol.adapt_to_hardware()
+    right before the adapted state is stored with "reinitialize store".
     '''
+    if QUALITY is not None:
+        from pymol import util
+        util.performance(QUALITY, _self=_RecordingCmd(_self))
     for name, value in DEFAULTS.items():
         _replaced.setdefault(name, _self.get(name))
         _self.set(name, value, quiet=1)
+
+
+class _RecordingCmd:
+    '''
+    cmd stand-in for util.performance: sets quietly and records the
+    values it replaces for revert()
+    '''
+
+    def __init__(self, _self):
+        self._self = _self
+
+    def __getattr__(self, name):
+        return getattr(self._self, name)
+
+    def set(self, name, value=1, *args, **kwargs):
+        _replaced.setdefault(name, self._self.get(name))
+        self._self.set(name, value, quiet=1)
 
 
 def revert(_self):

@@ -23,7 +23,7 @@ QMenuBar
     background:     $window;
     color:          $text;
     border-bottom:  1px solid $border;
-    font-size:      13px;
+    font-size:      $font_size;
     padding:        1px 2px;
 }
 
@@ -44,7 +44,7 @@ QMenu
     color:          $text;
     border:         1px solid $border;
     padding:        4px 0px;
-    font-size:      13px;
+    font-size:      $font_size;
 }
 
 QMenu::item
@@ -78,7 +78,7 @@ QFrame#mouse_controls_panel
 QLabel#mouse_controls_title
 {
     color:          $text;
-    font-size:      13px;
+    font-size:      $font_size;
     padding:        18px 12px;
     border-bottom:  1px solid $border;
 }
@@ -86,19 +86,19 @@ QLabel#mouse_controls_title
 QLabel#mouse_controls_keys
 {
     color:          #ff7a6b;
-    font-size:      13px;
+    font-size:      $font_size;
 }
 
 QLabel#mouse_controls_axis
 {
     color:          #8c8cff;
-    font-size:      13px;
+    font-size:      $font_size;
 }
 
 QLabel#mouse_controls_cell
 {
     color:          $text;
-    font-size:      13px;
+    font-size:      $font_size;
 }
 
 /* menus from pymol.menu: menus.PyMenu draws the (colored) item text */
@@ -142,8 +142,7 @@ QToolBar#pymolx_toolbar QToolButton
     border-radius:  0px;
     padding:        0px 10px;
     min-height:     33px;
-    font-size:      12px;
-    font-weight:    bold;
+    font-size:      $font_size;
 }
 
 QToolBar#pymolx_toolbar QToolButton:hover
@@ -253,7 +252,7 @@ QFrame#panel_row[enabled_item=true] QLabel#panel_dot
 QFrame#panel_row QLabel#panel_name
 {
     color:          $text_dim;
-    font-size:      13px;
+    font-size:      $font_size;
 }
 
 QFrame#panel_row[enabled_item=true] QLabel#panel_name
@@ -272,8 +271,7 @@ QFrame#panel_row QToolButton#ashlc
     min-height:     18px;
     max-height:     18px;
     padding:        0px;
-    font-size:      11px;
-    font-weight:    bold;
+    font-size:      $font_size;
 }
 
 QFrame#panel_row[enabled_item=true] QToolButton#ashlc
@@ -387,7 +385,7 @@ QLabel#state_label
 {
     color:          $text_dim;
     padding-left:   6px;
-    font-size:      12px;
+    font-size:      $font_size;
 }
 
 /* toggle toolbar (bottom of the content panel), same look as the toolbar */
@@ -416,8 +414,7 @@ QToolBar#pymolx_toggles QToolButton
     border-radius:  0px;
     padding:        0px 5px;
     min-height:     30px;
-    font-size:      12px;
-    font-weight:    bold;
+    font-size:      $font_size;
 }
 
 QToolBar#pymolx_toggles QToolButton:hover
@@ -478,8 +475,7 @@ QPlainTextEdit#feedback_browser
 QLabel#command_label
 {
     color:          $accent_text;
-    font-size:      13px;
-    font-weight:    bold;
+    font-size:      $font_size;
     padding-left:   6px;
 }
 

@@ -27,9 +27,14 @@ UPSTREAM_COPYRIGHT = ('Open-Source PyMOL is Copyright (C) Schr\xF6dinger, LLC.'
 
 SPLASH_PNG = '$PYMOL_DATA/pymolx/splash.png'
 
-# Show SPLASH_PNG in the viewer at startup. Off: like Incentive PyMOL, the
-# viewer shows the startup text (banner) until something is loaded.
+# Show SPLASH_PNG in the viewer at startup.
 SHOW_SPLASH_IMAGE = False
+
+# Without the splash image: show the startup text (banner) in the viewer
+# until something is loaded, like Incentive PyMOL. Off (owner's choice):
+# the viewer starts empty; the banner is in the output pane, and ESC
+# still switches the viewer to text mode.
+SHOW_STARTUP_TEXT = False
 
 
 def version():

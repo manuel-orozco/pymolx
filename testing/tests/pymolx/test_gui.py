@@ -257,9 +257,28 @@ def test_window_actions(window):
 
 def test_console_font(app):
     font = theme.console_font(['Arial', 'Consolas', 'DejaVu Sans Mono'])
-    assert font.family() == 'Consolas'
-    font = theme.console_font(['Arial', 'DejaVu Sans Mono'])
     assert font.family() == 'DejaVu Sans Mono'
-    assert font.pointSize() == theme.CONSOLE_FONT_SIZE
+    font = theme.console_font(['Arial', 'Consolas'])  # e.g. Windows
+    assert font.family() == 'Consolas'
+    # letters as tall as the interface font's at the same size (within a
+    # pixel: metrics come in whole pixels)
+    for size in (9, theme.FONT_SIZE, 16):
+        font = theme.console_font(['DejaVu Sans Mono'], size=size)
+        ui = QtGui.QFont(QtWidgets.QApplication.font())
+        ui.setPointSizeF(size)
+        assert QtGui.QFontMetricsF(font).capHeight() == pytest.approx(
+            QtGui.QFontMetricsF(ui).capHeight(), abs=1)
     # installed fonts: always a font
     assert theme.console_font().family()
+
+
+def test_one_text_size_no_bold(app):
+    # all GUI text the same size (FONT_SIZE); bold only for titles
+    import re
+    from pymol import cmd
+    qss = theme.stylesheet(cmd)
+    sizes = set(re.findall(r'font-size:\s*([^;]+);', qss))
+    assert sizes == {'%dpt' % theme.FONT_SIZE, '8px', '15px'}  # 2 symbols
+    bold = [m.group(1).strip().split('\n')[-1] for m in re.finditer(
+        r'([^{}]*)\{[^}]*font-weight:\s*bold', qss)]
+    assert bold == ['QLabel#wizard_title']

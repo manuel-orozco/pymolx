@@ -484,6 +484,17 @@ class PyMOLDesktopGUI(object):
                     ('command', 'Reasonable Quality',       'util.performance(33)'),
                     ('command', 'Maximum Quality',          'util.performance(0)'),
                 ]),
+                # pymolx: lighting presets and ambient occlusion
+                ('menu', 'Lighting', [
+                    ('command', 'Default',                  'lighting default'),
+                    ('command', 'Soft',                     'lighting soft'),
+                    ('command', 'Softer',                   'lighting softer'),
+                    ('command', 'Softest (Matte)',          'lighting softest'),
+                ]),
+                ('menu', 'Occlusion', [
+                    ('command', 'On (Surfaces)',            'occlusion on'),
+                    ('command', 'Off',                      'occlusion off'),
+                ]),
                 ('menu', 'Grid', [
                     ('radio', lab, 'grid_mode', val)
                     for lab, val in [
