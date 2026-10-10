@@ -51,6 +51,11 @@ class _RecordingCmd:
         _replaced.setdefault(name, self._self.get(name))
         self._self.set(name, value, quiet=1)
 
+    def do(self, *args, **kwargs):
+        # util.performance ends with "rebuild": nothing is loaded yet at
+        # startup, and it would echo "PyMOL>rebuild" in the output
+        pass
+
 
 def revert(_self):
     '''

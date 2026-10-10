@@ -384,7 +384,10 @@ class PyMOLDesktopGUI(object):
                 ('check', 'Show All States', 'all_states', 1),
             ]),
             ('menu', 'Display', [
-                ('check', 'Sequence', 'seq_view', 1),
+                # pymolx: a submenu, the Qt GUI adds "Font"
+                ('menu', 'Sequence', [
+                    ('check', 'Show Sequence Viewer', 'seq_view', 1),
+                ]),
                 ('menu', 'Sequence Mode', [
                     ('radio', lab, 'seq_view_format', val)
                     for lab, val in [

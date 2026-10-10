@@ -43,6 +43,7 @@ MENU_SELE = '_seqview_menu'
 DIVIDER_GRAB = 3  # pixels either side of the label column edge
 
 PREF_BY_OBJECT = 'pymolx_seq_by_object'
+PREF_FONT_FAMILY = 'pymolx_seq_font'
 
 FONT_SIZES = (6, 24)  # points, smallest and largest
 WHEEL_STEP = 120      # angleDelta of one wheel notch: one point
@@ -93,6 +94,7 @@ class SequenceViewer(QtWidgets.QAbstractScrollArea):
 
     shownChanged = QtCore.Signal(bool)
     layoutChanged = QtCore.Signal(bool)  # by_object
+    fontChanged = QtCore.Signal(str)     # name (theme.SEQUENCE_FONTS)
 
     def __init__(self, cmd, parent=None, prefs=None):
         super().__init__(parent)
@@ -128,6 +130,9 @@ class SequenceViewer(QtWidgets.QAbstractScrollArea):
         # points, like the interface font (the monospace font itself is
         # sized to match it: see theme.console_font)
         self._font_size = theme.FONT_SIZE
+        self._font_family = None  # None: theme.CONSOLE_FONTS
+        self._font_bold = False
+        self._font_name = None    # menu name, e.g. "Courier New Bold"
         self.setFont(theme.console_font(size=self._font_size))
         self._set_metrics()
 
@@ -151,11 +156,54 @@ class SequenceViewer(QtWidgets.QAbstractScrollArea):
         size = self._clamp_font_size(size)
         if size == self._font_size:
             return
+        self._font_size = size
+        self._apply_font()
+
+    @property
+    def font_family(self):
+        return self.font().family()
+
+    @property
+    def font_name(self):
+        '''
+        The font as named in the Font menu (e.g. "Courier New Bold")
+        '''
+        return self._font_name or self.font_family
+
+    def set_font(self, name, save=True):
+        '''
+        Font of the residue letters, numbers and labels: a name from
+        theme.SEQUENCE_FONTS (Display > Sequence > Font) or any installed
+        family, sized like the interface font. Kept in the plugin
+        preferences.
+
+        :return: False if it isn't installed (nothing changes)
+        '''
+        family, bold, _ = theme.SEQUENCE_FONTS.get(name, (name, False, ''))
+        if family not in theme.installed_families():
+            return False
+        if save:
+            self.prefs.set(PREF_FONT_FAMILY, name)
+        changed = (family, bool(bold)) != (self.font_family,
+                                            self.font().bold())
+        self._font_name = name
+        if changed:
+            self._font_family, self._font_bold = family, bool(bold)
+            self._apply_font()
+        self.fontChanged.emit(name)
+        return True
+
+    def _apply_font(self):
+        '''
+        Use the current family and size; the residue at the left edge
+        stays there, sizes set by the user scale.
+        '''
         hbar = self.horizontalScrollBar()
         left_col = hbar.value() / self.char_w
         old_char_w, old_row_h = self.char_w, self.row_h
-        self._font_size = size
-        self.setFont(theme.console_font(size=size))
+        self.setFont(theme.console_font(size=self._font_size,
+                                        family=self._font_family,
+                                        bold=self._font_bold))
         self._set_metrics()
         # clamped when used, not here
         if self.label_width:
@@ -175,6 +223,40 @@ class SequenceViewer(QtWidgets.QAbstractScrollArea):
         window is built.
         '''
         self.set_by_object(self.prefs.get(PREF_BY_OBJECT, False), save=False)
+        name = self.prefs.get(PREF_FONT_FAMILY, None)
+        if name:
+            self.set_font(name, save=False)  # if still installed
+
+    def font_menu(self, parent=None):
+        '''
+        "Font" menu: theme.SEQUENCE_FONTS, those not installed disabled
+        with how to get them
+        '''
+        menu = QtWidgets.QMenu('Font', parent or self)
+        menu.setToolTipsVisible(True)
+        group = QtWidgets.QActionGroup(menu)
+
+        def fill():
+            menu.clear()
+            installed = theme.installed_families()
+            for name, (family, _, how) in theme.SEQUENCE_FONTS.items():
+                action = QtWidgets.QAction(name, menu)
+                action.setCheckable(True)
+                action.setChecked(name == self.font_name)
+                if family in installed:
+                    action.triggered.connect(
+                        lambda _=False, n=name: self.set_font(n))
+                else:
+                    action.setText(name + ' (not installed)')
+                    action.setEnabled(False)
+                    action.setToolTip('To install: %s, then restart' % how)
+                group.addAction(action)
+                menu.addAction(action)
+
+        # (not a decorator: PySide6's connect returns a Connection)
+        menu.aboutToShow.connect(fill)
+        fill()
+        return menu
 
     @staticmethod
     def _clamp_font_size(size):
@@ -257,6 +339,7 @@ class SequenceViewer(QtWidgets.QAbstractScrollArea):
         action.setEnabled(bool(self.user_height))
         action.triggered.connect(lambda: self.set_user_height(None))
         menu.addSeparator()
+        menu.addMenu(self.font_menu(menu))
         size = self.font_size
         for label, new_size in [('Larger Font', size + 1),
                                 ('Smaller Font', size - 1),
@@ -500,15 +583,30 @@ class SequenceViewer(QtWidgets.QAbstractScrollArea):
                     x = self._col_x(col) + cw // 2
                     painter.drawLine(x, top + self.line_h - 4,
                                      x, top + self.line_h - 1)
-            # residue cells
+            # residue cells, and gaps for residues absent from the chain
             base_y = top + self.line_h
+            painter.setPen(dim)
+            for col, text, _, _ in row.gaps:
+                if col + len(text) >= first_col and col <= last_col:
+                    painter.drawText(self._col_x(col), base_y + self.ascent,
+                                     text)
             for res in row.residues:
                 if res.col + res.width < first_col:
                     continue
                 if res.col > last_col:
                     break
-                color = self.qcolor(res.color)
                 x = self._col_x(res.col)
+                if not res.present:
+                    # missing from the model: grey, also when selected
+                    if res.key in self.selected:
+                        painter.fillRect(x, base_y, res.width * cw,
+                                         self.line_h, dim)
+                        painter.setPen(dark)
+                    else:
+                        painter.setPen(dim)
+                    painter.drawText(x, base_y + self.ascent, res.text)
+                    continue
+                color = self.qcolor(res.color)
                 if res.key in self.selected:
                     # inverted, like the OpenGL viewer
                     painter.fillRect(x, base_y, res.width * cw, self.line_h,
@@ -556,10 +654,21 @@ class SequenceViewer(QtWidgets.QAbstractScrollArea):
         lo, hi = min(i, j), max(i, j)
         return row.residues[lo:hi + 1]
 
+    def _report(self, residues, add, whole=False):
+        '''
+        Like a click in the 3D viewer: "You clicked ..." and the selection
+        count in the output, the command in the log file (if open)
+        '''
+        with self._no_undo():
+            sequence.report_selection(
+                sequence.describe_residues(residues, whole) if residues
+                else '', residues, add, _self=self.cmd)
+
     def _toggle_all(self, residues):
         add = not all(r.key in self.selected for r in residues)
         self._select(residues, add)
         self._anchor = None
+        self._report(residues, add, whole=True)
 
     def mousePressEvent(self, event):
         button = event.button()
@@ -585,7 +694,9 @@ class SequenceViewer(QtWidgets.QAbstractScrollArea):
             shift = event.modifiers() & Qt.KeyboardModifier.ShiftModifier
             if shift and self._anchor and self._anchor[0] == row.key:
                 _, anchor, add = self._anchor
-                self._select(self._range(row, anchor, index), add)
+                residues = self._range(row, anchor, index)
+                self._select(residues, add)
+                self._report(residues, add)
             else:
                 add = res.key not in self.selected
                 with self._no_undo():
@@ -594,9 +705,11 @@ class SequenceViewer(QtWidgets.QAbstractScrollArea):
                 self._drag = (row, index, add)
                 self._drag_last = index
                 self._anchor = (row.key, index, add)
-            if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            if event.modifiers() & Qt.KeyboardModifier.ControlModifier \
+                    and res.present:
                 self._center([res])
-        elif button == Qt.MouseButton.MiddleButton and res is not None:
+        elif button == Qt.MouseButton.MiddleButton and res is not None \
+                and res.present:
             self._center([res])
         elif button == Qt.MouseButton.RightButton and res is not None:
             self._residue_menu(res, _global_pos(event))
@@ -641,10 +754,15 @@ class SequenceViewer(QtWidgets.QAbstractScrollArea):
             self.set_label_width(_event_pos(event).x())
             return
         if self._drag is not None:
+            # one message for the whole click or drag
+            row, anchor, add = self._drag
+            last = self._drag_last if self._drag_last is not None else anchor
             self._drag = None
             self._drag_last = None
             with self._no_undo():
                 sequence.clear_base(_self=self.cmd)
+            if row in self.rows:
+                self._report(self._range(row, anchor, last), add)
 
     def leaveEvent(self, event):
         if self._divider_hover and not self._resizing_label:
@@ -665,7 +783,9 @@ class SequenceViewer(QtWidgets.QAbstractScrollArea):
                 col is not None and row.marker_at(col) is None)):
             # empty space: clear the selection, like the OpenGL viewer
             with self._no_undo():
-                sequence.deselect_all(_self=self.cmd)
+                cleared = sequence.deselect_all(_self=self.cmd)
+            if cleared:
+                self._report([], False)
             self.selected = set()
             self.viewport().update()
         else:
@@ -702,11 +822,19 @@ class SequenceViewer(QtWidgets.QAbstractScrollArea):
                 text = 'Drag to resize, double-click to fit the labels'
             elif res is not None:
                 text = res.macro
+                if not res.present:
+                    text += '\nnot in the model (no coordinates)'
             elif row is not None and col is None:
                 text = '%s\n\nClick to select the %s, right-click for the ' \
                     'row layout' % (row.label, what)
             elif row is not None and row.marker_at(col):
                 text = 'Click to select the chain'
+            elif row is not None and row.gap_at(col):
+                _, _, first, last = row.gap_at(col)
+                text = ('Residue %d is not in the structure' % first
+                        if first == last else
+                        'Residues %d-%d are not in the structure' % (first,
+                                                                    last))
             else:
                 text = ''
             if text:
@@ -857,10 +985,16 @@ def setup(window, prefs=None):
     menu = getattr(window, 'menudict', {}).get('Display')
     if menu is not None:
         for action in menu.actions():
-            if action.text() == 'Sequence' and action.isCheckable():
-                action.triggered.disconnect()
-                action.triggered.connect(viewer.set_shown)
-                toggles.append(action)
+            if action.text() == 'Sequence' and action.menu():
+                # Display > Sequence > Show Sequence Viewer, Font
+                sequence_menu = action.menu()
+                for item in sequence_menu.actions():
+                    if item.isCheckable():
+                        item.triggered.disconnect()
+                        item.triggered.connect(viewer.set_shown)
+                        toggles.append(item)
+                window.sequence_font_menu = viewer.font_menu(sequence_menu)
+                sequence_menu.addMenu(window.sequence_font_menu)
             elif action.text() == 'Sequence Mode' and action.menu():
                 window.sequence_layout_actions = _add_layout_actions(
                     action.menu(), viewer)

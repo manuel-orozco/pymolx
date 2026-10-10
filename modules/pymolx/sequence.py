@@ -14,6 +14,7 @@ from pymol import cmd, _cmd
 FLAG_PROTEIN = 0x00000040
 FLAG_NUCLEIC = 0x00000080
 FLAG_POLYMER = 0x08000000
+FLAG_SOLVENT = 0x10000000
 FLAG_GUIDE = 0x80000000
 # polymer residues: terminal nucleotides can be classed "organic" but
 # still have the nucleic bit
@@ -27,6 +28,12 @@ SELE_MODE_KEYWORDS = ['', 'byresi', 'bychain', 'bysegi', 'byobject',
 FORMAT_CODES = 0
 FORMAT_NAMES = 1
 FORMAT_CHAINS = 3
+
+# seq_view_gap_mode: residues absent from a chain (numbering jumps, e.g.
+# after "remove") shown as "-" per residue, as one "-", or not at all
+GAP_NONE, GAP_ALL, GAP_SINGLE = 0, 1, 2
+MAX_GAP_DASHES = 9          # longer gaps: LONG_GAP, like the OpenGL viewer
+LONG_GAP = '---...---'
 
 NUMBER_SPACING = 10  # residue numbers above every 10th residue
 TICK_SPACING = 5     # small ticks in between
@@ -45,12 +52,15 @@ class Residue:
     :ivar color: PyMOL color index (guide atom, else a carbon, else the
         first atom, like the OpenGL viewer)
     :ivar indices: atom indices (1-based, for select_list mode "index")
+    :ivar present: has coordinates in the current state; False for
+        residues missing from the model (shown greyed out)
     '''
     __slots__ = ('model', 'segi', 'chain', 'resi', 'resv', 'resn', 'polymer',
-                 'code', 'text', 'col', 'color', 'indices', '_color_rank')
+                 'water', 'code', 'text', 'col', 'color', 'indices',
+                 'present', '_color_rank')
 
     def __init__(self, model, segi, chain, resi, resv, resn, polymer,
-                 code='?'):
+                 code='?', water=False):
         self.model = model
         self.segi = segi
         self.chain = chain
@@ -58,11 +68,13 @@ class Residue:
         self.resv = resv
         self.resn = resn
         self.polymer = polymer
+        self.water = water
         self.code = code
         self.text = ''
         self.col = 0
         self.color = 0
         self.indices = []
+        self.present = True
         self._color_rank = -1
 
     @property
@@ -95,6 +107,8 @@ class SeqRow:
         the number line above blank cells
     :ivar numbers: (col, text) residue numbers shown above the cells
     :ivar ticks: columns with a tick mark (every TICK_SPACING residues)
+    :ivar gaps: (col, text, first resv, last resv) of residues absent from
+        a chain (no atoms at all), between its polymer residues
     :ivar ncols: width in characters
     '''
 
@@ -107,6 +121,7 @@ class SeqRow:
         self.markers = []
         self.numbers = []
         self.ticks = []
+        self.gaps = []
         self.ncols = 0
         self._cols = []
 
@@ -116,13 +131,12 @@ class SeqRow:
         One row for an object from its chain rows (in order)
         '''
         merged = cls(rows[0].model, None, None)
-        segi = None
         for row in rows:
-            if row.segi and row.segi not in (row.chain, segi):
+            # "/segment/chain/", like PyMOL's /object/segment/chain/ macros
+            if row.segi:
                 marker = '/%s/%s/' % (row.segi, row.chain)
             else:
                 marker = '/%s/' % row.chain
-            segi = row.segi
             merged.parts.append((marker, row.residues))
             merged.residues.extend(row.residues)
         return merged
@@ -134,19 +148,26 @@ class SeqRow:
     @property
     def label(self):
         '''
-        "object/chain", with the segment if there is one besides the
-        chain; just "object" for a whole-object row
+        "object/segment/chain" (e.g. "5occ/A/A"), without the parts the
+        file doesn't have; just "object" for a whole-object row
         '''
         parts = [self.model]
-        if self.segi and self.segi != self.chain:
+        if self.segi:
             parts.append(self.segi)
         if self.chain:
             parts.append(self.chain)
-        return '/'.join(parts)
+        label = '/'.join(parts)
+        if self.water_only:
+            label += ' (water)'
+        return label
 
     @property
     def has_polymer(self):
         return any(r.polymer for r in self.residues)
+
+    @property
+    def water_only(self):
+        return bool(self.residues) and all(r.water for r in self.residues)
 
     def residue_at(self, col):
         '''
@@ -157,6 +178,16 @@ class SeqRow:
             res = self.residues[i]
             if col < res.col + res.width:
                 return res
+        return None
+
+    def gap_at(self, col):
+        '''
+        :return: (col, text, first resv, last resv) of the gap covering
+            column col, or None
+        '''
+        for gap in self.gaps:
+            if gap[0] <= col < gap[0] + len(gap[1]):
+                return gap
         return None
 
     def marker_at(self, col):
@@ -185,12 +216,14 @@ class SeqRow:
                 return i + 1
         return i
 
-    def layout(self, fmt=FORMAT_CODES):
+    def layout(self, fmt=FORMAT_CODES, gap_mode=GAP_ALL):
         '''
-        Set the cell texts and columns, chain markers, residue numbers and
-        ticks. Non-polymer residues (ligands, ions) show their name with a
-        blank column on each side. Ligands and ions of a chain come after
-        its polymer residues.
+        Set the cell texts and columns, chain markers, gaps, residue
+        numbers and ticks. Non-polymer residues (ligands, ions) show their
+        name with a blank column on each side. Ligands and ions of a chain
+        come after its polymer residues.
+
+        :param gap_mode: GAP_NONE, GAP_ALL or GAP_SINGLE (seq_view_gap_mode)
         '''
         if not self.parts:
             self.parts = [('', self.residues)]
@@ -198,17 +231,37 @@ class SeqRow:
         self.markers = []
         self.numbers = []
         self.ticks = []
+        self.gaps = []
         col = 0
         for marker, residues in self.parts:
-            residues.sort(key=lambda res: not res.polymer)
+            # polymer, then ligands and ions, then water
+            residues.sort(key=lambda res: 0 if res.polymer else
+                          2 if res.water else 1)
             if marker:
                 if col:
                     col += 1
                 self.markers.append((col, marker, residues))
                 col += len(marker) + 1  # blank cells under "/A/ "
             prev_wide = False
+            prev_polymer = None
+            prev = None
             first_col = col
             for res in residues:
+                if res.polymer:
+                    if prev_polymer is not None and gap_mode != GAP_NONE \
+                            and prev_polymer.chain == res.chain:
+                        absent = res.resv - prev_polymer.resv - 1
+                        if absent > 0:
+                            text = ('-' if gap_mode == GAP_SINGLE else
+                                    '-' * absent if absent <= MAX_GAP_DASHES
+                                    else LONG_GAP)
+                            if prev_wide:
+                                col += 1
+                            self.gaps.append((col, text, prev_polymer.resv + 1,
+                                              res.resv - 1))
+                            col += len(text)
+                            prev_wide = False
+                    prev_polymer = res
                 if fmt == FORMAT_NAMES:
                     res.text = res.resn or '?'
                     wide = True
@@ -218,36 +271,45 @@ class SeqRow:
                 elif res.polymer:
                     res.text = res.code
                     wide = False
+                elif res.water:
+                    res.text = 'O'  # like the OpenGL viewer
+                    wide = False
                 else:
                     res.text = res.resn or '?'
                     wide = True
-                if col > first_col and (wide or prev_wide):
+                # a blank column before the first water after other cells
+                water_start = res.water and prev is not None and \
+                    not prev.water
+                if col > first_col and (wide or prev_wide or water_start):
                     col += 1
                 res.col = col
                 col += res.width
                 prev_wide = wide
+                prev = res
             self._number(residues)
             self.residues.extend(residues)
         self.ncols = col
         self._cols = [res.col for res in self.residues]
 
     def _number(self, residues):
-        # numbers above every NUMBER_SPACING-th polymer residue (and the
-        # first one of the chain), never overlapping
+        # numbers above every NUMBER_SPACING-th residue (and the first one
+        # of the chain and of its water), never overlapping; ligands and
+        # ions have their names instead
         free = 0
         if self.numbers:
             col, text = self.numbers[-1]
             free = col + len(text) + 1
-        first = True
+        prev = None
         for res in residues:
-            if not res.polymer:
+            if not (res.polymer or res.water):
                 continue
+            first = prev is None or res.water != prev.water
+            prev = res
             if res.resv % TICK_SPACING == 0:
                 self.ticks.append(res.col)
             if (first or res.resv % NUMBER_SPACING == 0) and res.col >= free:
                 self.numbers.append((res.col, res.resi))
                 free = res.col + len(res.resi) + 1
-            first = False
 
 
 _NUCLEIC_CODES = {'A': 'A', 'C': 'C', 'G': 'G', 'T': 'T', 'U': 'U',
@@ -290,19 +352,25 @@ def _shown_objects(_self):
     return names
 
 
-def get_rows(fmt=None, by_object=False, *, _self=cmd):
+def get_rows(fmt=None, by_object=False, gap_mode=None, *, _self=cmd):
     '''
     Rows of the sequence viewer: one per chain (and segment) of each
     enabled molecular object. Polymer residues come first, in atom
-    order, then ligands and ions. Water is left out.
+    order, then ligands and ions, then water ("O"). Residues missing
+    from the model are included with present=False: atoms without
+    coordinates in the current state (mmCIF), or PDB REMARK 465 entries
+    (pymolx.missing).
 
     :param fmt: seq_view_format value (default: the current setting)
     :param by_object: one row per object, chains side by side (like the
         OpenGL viewer)
+    :param gap_mode: seq_view_gap_mode value (default: the current setting)
     :return: list of SeqRow
     '''
     if fmt is None:
         fmt = _self.get_setting_int('seq_view_format')
+    if gap_mode is None:
+        gap_mode = _self.get_setting_int('seq_view_gap_mode')
     objects = _shown_objects(_self)
     if not objects:
         return []
@@ -319,9 +387,12 @@ def get_rows(fmt=None, by_object=False, *, _self=cmd):
             row = rows.get(rkey)
             if row is None:
                 row = rows[rkey] = SeqRow(model, segi, chain)
+            polymer = bool(flags & POLYMER_FLAGS)
             res = residues[key] = Residue(model, segi, chain, resi, resv,
-                                          resn, bool(flags & POLYMER_FLAGS),
-                                          one_letter(resn, oneletter))
+                                          resn, polymer,
+                                          one_letter(resn, oneletter),
+                                          not polymer and
+                                          bool(flags & FLAG_SOLVENT))
             row.residues.append(res)
         res.indices.append(index)
         # guide atom > carbon > first atom
@@ -330,10 +401,24 @@ def get_rows(fmt=None, by_object=False, *, _self=cmd):
             res.color = color
             res._color_rank = rank
 
-    selection = '(%s) and not solvent' % ' '.join('%' + n for n in objects)
+    selection = ' '.join('%' + n for n in objects)
     _self.iterate(selection, 'add(model, segi, chain, resi, resv, resn, '
                   'color, flags, elem, index, oneletter)',
                   space={'add': add})
+
+    # residues whose atoms all lack coordinates in the current state
+    # (usually few atoms: mmCIF adds missing residues as such CA atoms)
+    absent = {}
+
+    def count(key):
+        absent[key] = absent.get(key, 0) + 1
+
+    _self.iterate('(%s) and not present' % selection,
+                  'count((model, segi, chain, resi))', space={'count': count})
+    for key, n in absent.items():
+        res = residues.get(key)
+        if res is not None and n >= len(res.indices):
+            res.present = False
 
     order = {name: i for i, name in enumerate(objects)}
     result = sorted(rows.values(), key=lambda row: order[row.model])
@@ -343,7 +428,7 @@ def get_rows(fmt=None, by_object=False, *, _self=cmd):
             chains.setdefault(row.model, []).append(row)
         result = [SeqRow.merge(rows) for rows in chains.values()]
     for row in result:
-        row.layout(fmt)
+        row.layout(fmt, gap_mode)
     return result
 
 
@@ -416,6 +501,9 @@ def select_residues(residues, add=True, base=None, *, _self=cmd):
         active one (e.g. its state when a drag started)
     :return: name of the selection
     '''
+    residues = [res for res in residues if res.indices]
+    if not residues and base is None:
+        return active_selection(_self=_self)
     name = active_selection(create=True, _self=_self)
     if base is None:
         base = name
@@ -430,10 +518,94 @@ def select_residues(residues, add=True, base=None, *, _self=cmd):
     _self.select(name, expr, enable=enable)
     _self.delete(TEMP_SELE)
 
+    # like a click in the 3D viewer, which can't pick residues without
+    # coordinates (e.g. mutagenesis fails on those)
     wizard = _self.get_wizard()
-    if wizard is not None and hasattr(wizard, 'do_select'):
+    if wizard is not None and hasattr(wizard, 'do_select') and \
+            any(res.present for res in residues):
         wizard.do_select(name)
     return name
+
+
+def residues_expression(residues):
+    '''
+    Selection expression for residues, e.g.
+    '(%5iey and segi "A" and chain "A" and resi 2+3+4)', for logs (the
+    viewer's temporary selections don't exist when a log is replayed).
+    Keywords, not /object/segi/chain/resi macros: an empty macro field
+    matches anything, and macros don't take negative residue numbers.
+    '''
+    groups = {}
+    for res in residues:
+        resi = res.resi.replace('-', '\\-')  # negative numbers
+        groups.setdefault((res.model, res.segi, res.chain), []).append(resi)
+    return ' or '.join(
+        '(%%%s and segi "%s" and chain "%s" and resi %s)' % (
+            model, segi, chain, '+'.join(resis))
+        for (model, segi, chain), resis in groups.items())
+
+
+def report_selection(what, residues, add, name=None, *, _self=cmd):
+    '''
+    After a selection gesture in the sequence viewer: the messages a
+    click in the 3D viewer prints, and the command for the log file
+    (if one is open).
+
+    :param what: description, e.g. "You clicked /5iey/A/A/GLU`2"
+    :param residues: Residue list the gesture added or removed (empty
+        for "select none")
+    :param add: added (True) or removed (False)
+    '''
+    if what and _self._feedback(_self.fb_module.scene,
+                                _self.fb_mask.results):
+        print(' ' + what)
+    if name is None:
+        name = active_selection(_self=_self)
+    if name is None:
+        return  # e.g. a wizard (mutagenesis) took and deleted it
+    if _self._feedback(_self.fb_module.selector, _self.fb_mask.actions):
+        count = _self.count_atoms('?' + name) if \
+            name in _self.get_names('selections') else 0
+        print(' Selector: selection "%s" defined with %d atoms.' % (
+            name, count))
+    if residues:
+        mode = SELE_MODE_KEYWORDS[_self.get_setting_int(
+            'mouse_selection_mode') % len(SELE_MODE_KEYWORDS)]
+        expr = '(%s(?%s)) %s %s(%s)' % (mode, name, 'or' if add else
+                                       'and not', mode,
+                                       residues_expression(residues))
+    else:
+        expr = 'none'
+    _self.log('select %s, %s\n' % (name, expr),
+              'cmd.select(%r, %r, enable=1)\n' % (name, expr))
+
+
+def describe_residues(residues, whole=False):
+    '''
+    "You clicked /5iey/A/A/GLU`2" for one residue, "You selected
+    /5iey/A/A/GLU`2 to /5iey/A/A/LYS`6" for a range; with whole=True
+    (a chain or object label was clicked) "You clicked /5iey/A/A/" or
+    "You clicked /5iey/". Notes residues without coordinates: "(no
+    coordinates)" or "(3 without coordinates)".
+    '''
+    first = residues[0]
+    if whole:
+        chains = {(r.model, r.segi, r.chain) for r in residues}
+        if len(chains) == 1:
+            text = 'You clicked /%s/%s/%s/' % chains.pop()
+        else:
+            text = 'You clicked /%s/' % first.model
+    elif len(residues) == 1:
+        text = 'You clicked ' + first.macro
+    else:
+        text = 'You selected %s to %s' % (first.macro, residues[-1].macro)
+    # residues missing from the model (greyed out in the viewer)
+    absent = sum(1 for r in residues if not r.present)
+    if absent == len(residues):
+        text += ' (no coordinates)'
+    elif absent:
+        text += ' (%d without coordinates)' % absent
+    return text
 
 
 def save_base(*, _self=cmd):

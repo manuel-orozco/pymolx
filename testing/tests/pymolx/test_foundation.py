@@ -134,7 +134,11 @@ def test_default_quality_is_maximum(monkeypatch, capsys):
         low = {n: cmd.get(n) for n in names}
         capsys.readouterr()
 
-        defaults.apply(cmd)
+        queued = []
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(cmd, 'do', lambda *a, **k: queued.append(a))
+            defaults.apply(cmd)
+        assert queued == []  # no "rebuild" echoed at startup
         assert capsys.readouterr().out == ''
         assert cmd.get_setting_int('cartoon_sampling') == 14
         assert cmd.get_setting_int('surface_quality') == 1

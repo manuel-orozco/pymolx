@@ -100,7 +100,32 @@ def palette():
     return pal
 
 
-def console_font(families=None, size=None):
+# fonts offered for the sequence viewer (Display > Sequence > Font):
+# menu name -> (family, bold, how to get it if not installed)
+_MS_CORE_FONTS = 'sudo apt install ttf-mscorefonts-installer'
+SEQUENCE_FONTS = {
+    'DejaVu Sans Mono': ('DejaVu Sans Mono', False,
+                         'sudo apt install fonts-dejavu-core'),
+    'Courier New': ('Courier New', False, _MS_CORE_FONTS),
+    'Courier New Bold': ('Courier New', True, _MS_CORE_FONTS),
+    'Aptos Mono': ('Aptos Mono', False,
+                   'download "Microsoft Aptos Fonts" from microsoft.com '
+                   'and unzip it into ~/.local/share/fonts'),
+    'Consolas': ('Consolas', False,
+                 'copy consola*.ttf from Windows (C:\\Windows\\Fonts) '
+                 'to ~/.local/share/fonts'),
+}
+
+
+def installed_families():
+    from pymol.Qt import QtGui
+    try:
+        return set(QtGui.QFontDatabase.families())    # Qt 6
+    except TypeError:
+        return set(QtGui.QFontDatabase().families())  # Qt 5
+
+
+def console_font(families=None, size=None, family=None, bold=False):
     '''
     QFont for the output pane, command line and sequence viewer: the
     first installed family of CONSOLE_FONTS, else the system monospace
@@ -109,18 +134,19 @@ def console_font(families=None, size=None):
 
     :param families: installed families (default: ask Qt)
     :param size: points, as for the interface font (default: FONT_SIZE)
+    :param family: wanted family, if installed (default: CONSOLE_FONTS)
+    :param bold: bold weight (e.g. "Courier New Bold", thin otherwise)
     '''
     from pymol.Qt import QtGui, QtWidgets
-    if families is None:
-        try:
-            families = QtGui.QFontDatabase.families()    # Qt 6
-        except TypeError:
-            families = QtGui.QFontDatabase().families()  # Qt 5
-    installed = set(families)
-    family = next((f for f in CONSOLE_FONTS if f in installed), 'Monospace')
+    installed = set(families) if families is not None else \
+        installed_families()
+    if family not in installed:
+        family = next((f for f in CONSOLE_FONTS if f in installed),
+                      'Monospace')
     size = size or FONT_SIZE
     font = QtGui.QFont(family)
     font.setStyleHint(QtGui.QFont.StyleHint.Monospace)
+    font.setBold(bool(bold))
     # scale exactly: hinting snaps letter heights to a few pixel sizes
     # (DejaVu's capitals jump from 10 to 12 px around 11 pt)
     font.setHintingPreference(QtGui.QFont.HintingPreference.PreferNoHinting)

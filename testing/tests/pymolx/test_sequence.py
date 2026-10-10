@@ -70,8 +70,9 @@ def test_ligands_ions_and_water():
     assert row.label == 'dhfr/A'  # segment "A" is not repeated
     text = row_text(row)
     assert text.startswith('MISLIAALAVDRVIG')
-    # non-polymer residues: names with a blank column before; no water
-    assert text.endswith('ERR NAP CA')
+    # ligands and ions: names with a blank column before; then water, as
+    # "O" like the OpenGL viewer
+    assert text.endswith('ERR NAP CA ' + 'O' * 118)
     assert 'HOH' not in text
     nap = [r for r in row.residues if r.resn == 'NAP'][0]
     assert not nap.polymer and nap.width == 3
@@ -84,7 +85,28 @@ def test_ligands_after_polymer():
     cmd.alter('resn NAP', 'resi="0"')  # before the protein in atom order
     cmd.sort()
     row, = sequence.get_rows()
-    assert row_text(row).endswith('ERR NAP CA')
+    assert 'ERR NAP CA OOO' in row_text(row)
+
+
+def test_water_rows():
+    # waters in their own segment (like 6puz): a row of "O"s, numbered
+    cmd.load(os.path.join(DATA, '1rx1.pdb'), 'dhfr')
+    cmd.alter('solvent', 'segi="W"')
+    rows = by_label(sequence.get_rows())
+    water = rows['dhfr/W/A (water)']
+    assert water.water_only and not water.has_polymer
+    assert row_text(water) == 'O' * 118
+    first = water.residues[0]
+    assert water.numbers[0] == (0, first.resi)
+    # colored like their oxygen atoms
+    oxygen = []
+    cmd.iterate('first (solvent and elem O)', 'oxygen.append(color)',
+                space={'oxygen': oxygen})
+    assert first.color == oxygen[0]
+    # selectable like residues
+    sequence.select_residues(water.residues[:2])
+    assert len(sequence.get_selected()) == 2
+    assert 'dhfr/A' in rows and not rows['dhfr/A'].water_only
 
 
 def two_chains():
@@ -117,15 +139,81 @@ def test_rows_by_object_with_ligand_chain():
     cmd.alter('resn NAP', 'chain="B"')
     row, = sequence.get_rows(by_object=True)
     assert [text for _, text, _ in row.markers] == ['/A/', '/B/']
-    assert row_text(row).endswith('ERR CA     NAP')
+    assert row_text(row).endswith('ERR CA ' + 'O' * 118 + '     NAP')
+
+
+def gapped_text(row):
+    '''cells and gaps with their columns'''
+    cells = [(r.col, r.text) for r in row.residues]
+    cells += [(g[0], g[1]) for g in row.gaps]
+    text = ''
+    for col, cell in sorted(cells):
+        text += ' ' * (col - len(text)) + cell
+    return text
+
+
+def test_removed_residues_shown_as_gaps():
+    cmd.fab('ACDEFGHIKLMNPQRSTVWY', 'p')
+    cmd.remove('resi 5-7')                 # 3 absent: one dash each
+    row, = sequence.get_rows()
+    assert gapped_text(row) == 'ACDE---IKLMNPQRSTVWY'
+    assert row.gaps == [(4, '---', 5, 7)]
+    assert row.residue_at(5) is None and row.gap_at(5)[2:] == (5, 7)
+    # numbers stay with their residues
+    assert (9, '10') in row.numbers  # residue 10, after the gap
+
+    cmd.remove('resi 9-19')                # 11 absent: the long gap
+    row, = sequence.get_rows()
+    assert gapped_text(row) == 'ACDE---I---...---Y'
+
+    # the end of a chain is not a gap
+    cmd.remove('resi 20')
+    row, = sequence.get_rows()
+    assert gapped_text(row) == 'ACDE---I'
+
+
+def test_gap_modes():
+    cmd.fab('ACDEFGHIKL', 'p')
+    cmd.remove('resi 3-5')
+    single, = sequence.get_rows(gap_mode=sequence.GAP_SINGLE)
+    assert gapped_text(single) == 'AC-GHIKL'
+    none, = sequence.get_rows(gap_mode=sequence.GAP_NONE)
+    assert gapped_text(none) == 'ACGHIKL' and none.gaps == []
+    # the setting (Display > Sequence Mode)
+    cmd.set('seq_view_gap_mode', sequence.GAP_SINGLE)
+    row, = sequence.get_rows()
+    assert gapped_text(row) == 'AC-GHIKL'
+
+
+def test_no_gaps_between_chains_or_for_missing_residues():
+    two_chains()  # A 1-3, B 10-11
+    row, = sequence.get_rows(by_object=True)
+    assert row.gaps == []
+    # residues missing from the model fill their place: no gap
+    cmd.load(os.path.join(DATA, '1oky.pdb.gz'), 'kinase')
+    rows = [r for r in sequence.get_rows() if r.model == 'kinase']
+    assert not any(g[2] <= 71 for r in rows for g in r.gaps)
 
 
 def test_nucleic_acids():
     cmd.fnab('ACGT', mode='DNA', name='dna')
     rows = by_label(sequence.get_rows())
     # terminal residues included, all one-letter codes
-    assert row_text(rows['dna/A']) == 'ACGT'
-    assert row_text(rows['dna/B']) == 'ACGT'
+    assert row_text(rows['dna/A/A']) == 'ACGT'
+    assert row_text(rows['dna/B/B']) == 'ACGT'
+
+
+def test_segment_and_chain_shown():
+    # both IDs when the file has them, even when they are the same
+    cmd.fab('ACD', 'p1', chain='A', segi='A')
+    cmd.fab('EF', 'p2', chain='H', segi='B')
+    cmd.fab('GH', 'p3', chain='L')
+    cmd.create('p', 'p1 or p2 or p3')
+    cmd.delete('p1 or p2 or p3')
+    # (atom order: PyMOL sorts by segment, no segment first)
+    assert [r.label for r in sequence.get_rows()] == ['p/L', 'p/A/A', 'p/B/H']
+    row, = sequence.get_rows(by_object=True)
+    assert [text for _, text, _ in row.markers] == ['/L/', '/A/A/', '/B/H/']
 
 
 def test_residue_names_format():
@@ -253,6 +341,66 @@ def test_drag_from_base():
     assert sequence.BASE_SELE not in cmd.get_names('all')
 
 
+def test_residues_expression_and_messages():
+    cmd.fab('ACD', 'p', chain='A', segi='A')
+    cmd.alter('resi 1', 'resi="-1"')
+    row, = sequence.get_rows()
+    res = row.residues
+    assert sequence.residues_expression(res) == \
+        '(%p and segi "A" and chain "A" and resi \\-1+2+3)'
+    assert cmd.count_atoms(sequence.residues_expression(res[:2])) == \
+        cmd.count_atoms('resi \\-1+2') > 0
+    assert sequence.describe_residues(res[1:2]) == 'You clicked /p/A/A/CYS`2'
+    assert sequence.describe_residues(res) == \
+        'You selected /p/A/A/ALA`-1 to /p/A/A/ASP`3'
+    assert sequence.describe_residues(res, whole=True) == \
+        'You clicked /p/A/A/'
+
+
+def test_report_like_a_3d_click(capsys):
+    cmd.fab('ACDEF', 'p', chain='A', segi='A')
+    row, = sequence.get_rows()
+    capsys.readouterr()
+    sequence.select_residues(row.residues[1:2])
+    sequence.report_selection('You clicked ' + row.residues[1].macro,
+                              row.residues[1:2], True)
+    out = capsys.readouterr().out
+    assert ' You clicked /p/A/A/CYS`2' in out
+    n = cmd.count_atoms('sele')
+    assert ' Selector: selection "sele" defined with %d atoms.' % n in out
+
+    # "feedback disable" silences it, like 3D clicks
+    cmd.feedback('disable', 'scene selector', 'everything')
+    try:
+        sequence.report_selection('You clicked x', row.residues[1:2], True)
+        assert capsys.readouterr().out == ''
+    finally:
+        cmd.feedback('enable', 'scene selector', 'results actions')
+
+
+def test_report_logs_replayable_commands(tmp_path):
+    log = str(tmp_path / 'session.pml')
+    cmd.fab('ACDEFGHIK', 'p', chain='A', segi='A')
+    row, = sequence.get_rows()
+    cmd.log_open(log)
+    try:
+        span = row.residues[2:6]
+        sequence.select_residues(span)
+        sequence.report_selection('x', span, True)
+        sequence.select_residues(span[1:2], add=False)
+        sequence.report_selection('x', span[1:2], False)
+    finally:
+        cmd.log_close()
+    selected = sequence.get_selected()
+    text = open(log).read()
+    assert 'select sele, ' in text and 'resi 3+4+5+6' in text
+
+    # replayed in a fresh session: the same selection
+    cmd.delete('sele')
+    cmd.run(log)
+    assert sequence.get_selected() == selected
+
+
 def test_deselect_all():
     cmd.fab('ACD', 'p')
     cmd.select('sele', 'resi 1')
@@ -307,8 +455,11 @@ def window(app):
     display = QtWidgets.QMenu('Display', win)
     win.menudict = {'Wizard': QtWidgets.QMenu('Wizard', win),
                     'Display': display}
-    # like pmg_qt's SettingAction
-    action = display.addAction('Sequence')
+    # Display > Sequence > Show Sequence Viewer, like pmg_qt's SettingAction
+    sequence_menu = QtWidgets.QMenu('Sequence', display)
+    display.addMenu(sequence_menu)
+    win.sequence_menu = sequence_menu
+    action = sequence_menu.addAction('Show Sequence Viewer')
     action.setCheckable(True)
     action.triggered.connect(
         lambda: cmd.set('seq_view', int(action.isChecked())))
@@ -921,3 +1072,221 @@ def test_prefs_read_after_window_setup(window):
 
     viewer.prefs = Watch(window.prefs)
     viewer.load_prefs()  # loading again doesn't save anything
+
+
+@needs_qt
+def test_missing_residues_greyed_out(window):
+    from pymolx.gui import theme
+    viewer = window.sequence_viewer
+    vp = viewer.viewport()
+    cmd.load(os.path.join(DATA, '1oky.pdb.gz'))
+    cmd.color('red')
+    viewer.set_shown(True)
+    process()
+    row = viewer.rows[0]
+    absent = [r for r in row.residues if not r.present][0]
+    present = [r for r in row.residues if r.present and r.polymer][0]
+
+    def colors(res):
+        image = vp.grab().toImage()
+        rect = viewer.residue_rect(row, res)
+        return {image.pixelColor(x, y).name()
+                for x in range(rect.left(), rect.right() + 1)
+                for y in range(rect.top(), rect.bottom() + 1)}
+
+    def reddish(names):
+        return [c for c in names if QtGui.QColor(c).redF() > 0.6 and
+                QtGui.QColor(c).greenF() < 0.3]
+
+    assert reddish(colors(present))          # residue color
+    assert not reddish(colors(absent))       # grey, whatever its color
+    dim = QtGui.QColor(theme.COLORS['text_dim'])
+    assert any(abs(QtGui.QColor(c).lightness() - dim.lightness()) < 25
+               for c in colors(absent) if c != theme.COLORS['base'])
+
+    # still selectable: highlighted with a grey box
+    mouse(vp, 'press', cell_center(viewer, row, absent))
+    mouse(vp, 'release', cell_center(viewer, row, absent))
+    assert sequence.get_selected() == {absent.key}
+    filled = [c for c in colors(absent)
+              if abs(QtGui.QColor(c).lightness() - dim.lightness()) < 8]
+    rect = viewer.residue_rect(row, absent)
+    assert len(filled) >= 1 and not reddish(colors(absent))
+    image = vp.grab().toImage()
+    corner = image.pixelColor(rect.left(), rect.top())  # box, not letter
+    assert abs(corner.lightness() - dim.lightness()) < 8
+
+
+@needs_qt
+def test_gaps_in_viewer(window):
+    from pymolx.gui import theme
+    viewer = window.sequence_viewer
+    vp = viewer.viewport()
+    cmd.fab('ACDEFGHIKLMNPQRSTVWY', 'p')
+    cmd.color('red')
+    cmd.remove('resi 5-7')
+    viewer.set_shown(True)
+    process()
+    row = viewer.rows[0]
+    col, text, first, last = row.gaps[0]
+    x = viewer._col_x(col)
+    y = viewer._row_top(0) + viewer.line_h
+    rect = QtCore.QRect(x, y, len(text) * viewer.char_w, viewer.line_h)
+
+    image = vp.grab().toImage()
+    pixels = [image.pixelColor(px, py) for px in range(rect.left(),
+              rect.right()) for py in range(rect.top(), rect.bottom())]
+    assert not [c for c in pixels if c.redF() > 0.6 and c.greenF() < 0.3]
+    # grey dashes (thin and smoothed: any clearly visible grey pixel)
+    base = QtGui.QColor(theme.COLORS['base'])
+    assert any(c.lightness() > base.lightness() + 30 and
+               max(c.red(), c.green(), c.blue()) -
+               min(c.red(), c.green(), c.blue()) < 12 for c in pixels)
+
+    # a click on a gap selects nothing
+    mouse(vp, 'press', rect.center())
+    mouse(vp, 'release', rect.center())
+    assert sequence.get_selected() == set()
+
+    # Display > Sequence Mode > No Gaps
+    cmd.set('seq_view_gap_mode', 0)
+    viewer.refresh()
+    assert viewer.rows[0].gaps == []
+
+
+@needs_qt
+def test_font_menu(window):
+    from pymolx.gui import sequence_viewer as sv, theme
+    viewer = window.sequence_viewer
+    installed = theme.installed_families()
+
+    # Display > Sequence > Font, after Show Sequence Viewer
+    sequence_actions = window.sequence_menu.actions()
+    assert [a.text() for a in sequence_actions] == [
+        'Show Sequence Viewer', 'Font']
+    menu = window.sequence_font_menu
+    menu.aboutToShow.emit()
+    actions = menu.actions()
+    assert list(theme.SEQUENCE_FONTS) == [
+        'DejaVu Sans Mono', 'Courier New', 'Courier New Bold', 'Aptos Mono',
+        'Consolas']
+    assert len(actions) == 5
+    for action, (name, (family, _, _)) in zip(
+            actions, theme.SEQUENCE_FONTS.items()):
+        if family in installed:
+            assert action.isEnabled() and action.text() == name
+        else:
+            # listed, but disabled, with how to get it
+            assert not action.isEnabled()
+            assert action.text() == name + ' (not installed)'
+            assert 'install' in action.toolTip().lower() or \
+                'copy' in action.toolTip().lower()
+    assert 'DejaVu Sans Mono' in installed
+    checked = [a.text() for a in actions if a.isChecked()]
+    assert checked == [viewer.font_name]
+
+    # the right-click menu has it too
+    labels = [a.text() for a in viewer.layout_menu().actions()]
+    assert 'Font' in labels
+
+
+@needs_qt
+def test_font_family(window):
+    from pymolx.gui import sequence_viewer as sv, theme
+    viewer = window.sequence_viewer
+    cmd.fab('ACDEFGHIKLMNPQRSTVWY' * 5, 'p')
+    viewer.set_shown(True)
+    process()
+
+    assert viewer.set_font('No Such Mono') is False
+    assert sv.PREF_FONT_FAMILY not in window.prefs
+
+    others = [f for f in ('Liberation Mono', 'Ubuntu Mono', 'Noto Mono')
+              if f in theme.installed_families()]
+    if not others:
+        pytest.skip('only one monospace font installed')
+    family = others[0]
+    assert viewer.set_font(family)
+    assert viewer.font_family == family
+    assert window.prefs[sv.PREF_FONT_FAMILY] == family  # kept
+    # same letter height as the interface font, and cells fit the text
+    ui = QtGui.QFont(QtWidgets.QApplication.font())
+    ui.setPointSizeF(viewer.font_size)
+    assert QtGui.QFontMetricsF(viewer.font()).capHeight() == pytest.approx(
+        QtGui.QFontMetricsF(ui).capHeight(), abs=1)
+    assert viewer.char_w >= QtGui.QFontMetricsF(
+        viewer.font()).horizontalAdvance('W')
+
+    # loaded from the preferences (after the window is built)
+    viewer.set_font('DejaVu Sans Mono', save=False)
+    viewer.load_prefs()
+    assert viewer.font_family == family
+    # uninstalled saved fonts are ignored
+    window.prefs[sv.PREF_FONT_FAMILY] = 'No Such Mono'
+    viewer.load_prefs()
+    assert viewer.font_family == family
+
+
+@needs_qt
+def test_courier_new_bold(window):
+    from pymolx.gui import sequence_viewer as sv, theme
+    if 'Courier New' not in theme.installed_families():
+        pytest.skip('Courier New not installed')
+    viewer = window.sequence_viewer
+    cmd.fab('ACDEFGHIK', 'p')
+    viewer.set_shown(True)
+
+    assert viewer.set_font('Courier New Bold')
+    assert viewer.font_family == 'Courier New' and viewer.font().bold()
+    assert window.prefs[sv.PREF_FONT_FAMILY] == 'Courier New Bold'
+    menu = window.sequence_font_menu
+    menu.aboutToShow.emit()
+    assert [a.text() for a in menu.actions() if a.isChecked()] == [
+        'Courier New Bold']
+    # same letter height as the interface font
+    ui = QtGui.QFont(QtWidgets.QApplication.font())
+    ui.setPointSizeF(viewer.font_size)
+    assert QtGui.QFontMetricsF(viewer.font()).capHeight() == pytest.approx(
+        QtGui.QFontMetricsF(ui).capHeight(), abs=1)
+
+    # regular Courier New is a separate choice
+    assert viewer.set_font('Courier New')
+    assert not viewer.font().bold() and viewer.font_name == 'Courier New'
+    # the bold one is restored from the preferences
+    window.prefs[sv.PREF_FONT_FAMILY] = 'Courier New Bold'
+    viewer.load_prefs()
+    assert viewer.font().bold() and viewer.font_name == 'Courier New Bold'
+
+
+@needs_qt
+def test_viewer_selection_output(window, capsys):
+    viewer = window.sequence_viewer
+    vp = viewer.viewport()
+    cmd.fab('ACDEFGHIKL', 'p', chain='A', segi='A')
+    viewer.set_shown(True)
+    process()
+    row = viewer.rows[0]
+    res = row.residues
+    capsys.readouterr()
+
+    mouse(vp, 'press', cell_center(viewer, row, res[1]))
+    mouse(vp, 'release', cell_center(viewer, row, res[1]))
+    out = capsys.readouterr().out
+    assert out.count('You clicked /p/A/A/CYS`2') == 1
+    assert 'Selector: selection "sele" defined with' in out
+
+    # a drag: one message when the mouse is released
+    mouse(vp, 'press', cell_center(viewer, row, res[3]))
+    for r in res[4:7]:
+        mouse(vp, 'move', cell_center(viewer, row, r))
+    assert 'You selected' not in capsys.readouterr().out
+    mouse(vp, 'release', cell_center(viewer, row, res[6]))
+    out = capsys.readouterr().out
+    assert out.count('You selected /p/A/A/GLU`4 to /p/A/A/HIS`7') == 1
+    assert out.count('Selector:') == 1
+
+    # double click on empty space
+    empty = QtCore.QPoint(viewer.width() - 5,
+                          cell_center(viewer, row, res[0]).y())
+    mouse(vp, 'double', empty)
+    assert 'defined with 0 atoms' in capsys.readouterr().out

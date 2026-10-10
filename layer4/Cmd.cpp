@@ -2421,6 +2421,71 @@ static PyObject* CmdGetSeqChangeCounts(PyObject* self, PyObject* args)
   return Py_BuildValue("(II)", counts.first, counts.second);
 }
 
+/*
+ * pymolx: add CA atoms without coordinates for residues missing from the
+ * model (e.g. PDB REMARK 465), like the mmCIF reader does for
+ * _entity_poly_seq, so sequence viewers show them and they can be
+ * selected (parity item L-07).
+ *
+ * residues: list of (segi, chain, resv, inscode, resn)
+ * Returns the number of atoms added.
+ */
+static PyObject* CmdAddMissingCA(PyObject* self, PyObject* args)
+{
+  PyMOLGlobals* G = nullptr;
+  const char* name;
+  PyObject* list;
+  API_SETUP_ARGS(G, self, args, "OsO!", &self, &name, &PyList_Type, &list);
+  API_ASSERT(APIEnterNotModal(G));
+
+  int added = 0;
+  auto obj = ExecutiveFindObjectMoleculeByName(G, name);
+  if (obj && !obj->DiscreteFlag &&
+      !SettingGetGlobal_i(G, cSetting_retain_order)) {
+    Py_ssize_t n = PyList_Size(list);
+    int n0 = obj->NAtom;
+    if (n > 0) {
+      obj->AtomInfo.check(n0 + n - 1);
+      memset(obj->AtomInfo.data() + n0, 0, sizeof(AtomInfoType) * n);
+    }
+    for (Py_ssize_t i = 0; i < n; ++i) {
+      const char *segi, *chain, *inscode, *resn;
+      int resv;
+      if (!PyArg_ParseTuple(PyList_GET_ITEM(list, i), "ssiss", &segi,
+              &chain, &resv, &inscode, &resn)) {
+        PyErr_Clear();
+        continue;
+      }
+      AtomInfoType* ai = obj->AtomInfo.data() + n0 + added;
+      ai->rank = n0 + added;
+      ai->id = -1;
+      ai->elem[0] = 'C';
+      LexAssign(G, ai->name, "CA");
+      LexAssign(G, ai->resn, resn);
+      LexAssign(G, ai->segi, segi);
+      LexAssign(G, ai->chain, chain);
+      ai->resv = resv;
+      ai->setInscode(inscode[0]);
+      AtomInfoAssignParameters(G, ai);
+      AtomInfoAssignColors(G, ai);
+      ++added;
+    }
+    if (added) {
+      obj->NAtom = n0 + added;
+      obj->updateAtmToIdx();
+      ObjectMoleculeSort(obj);
+      ObjectMoleculeUpdateIDNumbers(obj);
+      obj->invalidate(cRepAll, cRepInvAll, -1);
+      ExecutiveUpdateObjectSelection(G, obj);
+      SeqChanged(G);
+      SceneChanged(G);
+    }
+  }
+
+  APIExit(G);
+  return PyLong_FromLong(added);
+}
+
 static PyObject *CmdInterrupt(PyObject * self, PyObject * args)
 {
   PyMOLGlobals *G = nullptr;
@@ -6513,6 +6578,7 @@ static PyMethodDef Cmd_methods[] = {
   {"get_names", CmdGetNames, METH_VARARGS},
   {"get_panel_list", CmdGetPanelList, METH_VARARGS},
   {"get_seq_change_counts", CmdGetSeqChangeCounts, METH_VARARGS},
+  {"add_missing_ca", CmdAddMissingCA, METH_VARARGS},
   {"get_object_color_index", CmdGetObjectColorIndex, METH_VARARGS},
   {"get_object_matrix", CmdGetObjectMatrix, METH_VARARGS},
   {"get_object_ttt", CmdGetObjectTTT, METH_VARARGS},

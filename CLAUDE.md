@@ -61,7 +61,8 @@ used in code and commits: [INCENTIVE_PARITY.md](INCENTIVE_PARITY.md).
   font, `$font_size` in the stylesheet, console font. Console font
   (output, command line, sequence viewer): `theme.console_font()`,
   first of `theme.CONSOLE_FONTS` (DejaVu Sans Mono), sized so its letters
-  are as tall as the interface font's. No bold text except titles.
+  are as tall as the interface font's. No bold text except titles (and
+  the user's choice of "Courier New Bold" in Display > Sequence > Font).
 - Menus from `pymol.menu` data: `pymolx.gui.menus.PyMenu` + `fill_menu`
   (draws PyMOL color codes like `\900`).
 - Main window parts: toolbar (`gui/toolbar.py`), content panel with
@@ -76,6 +77,8 @@ used in code and commits: [INCENTIVE_PARITY.md](INCENTIVE_PARITY.md).
   reference goes; create `QMenu(title, parent)` and `addMenu(menu)`.
   Fetching menus through temporary `action.menu()` wrappers can also fail
   in scripts; find live menus via `QApplication.allWidgets()`.
+- PySide6: `signal.connect` returns a Connection, so `@signal.connect`
+  as a decorator replaces the function; connect after defining it.
 - `cmd.do` only queues commands (run later by the C loop).
 - `iterate` variable for ATOM/HETATM is `type` (no `hetatm`).
 - `fixed` is a selection keyword: never name an object "fixed".
@@ -94,6 +97,11 @@ used in code and commits: [INCENTIVE_PARITY.md](INCENTIVE_PARITY.md).
 - Plugin preferences (`~/.pymolpluginsrc.py`, `plugins.pref_get`) are
   read after the main window is built: read them again from a
   `QTimer.singleShot(0, ...)` set up during window setup.
+- `cmd.load` is wrapped twice: `pymolx.missing` (adds PDB REMARK 465
+  residues as CA atoms without coordinates, like the mmCIF reader) inside
+  `pymolx.undo` (one undo step). Wrap commands before `undo.install` and
+  update `_self.keyword` entries too. Atoms without coordinates: selection
+  keyword `present` excludes them; `count_atoms` includes them.
 - Kill test processes by PID, never `pkill -f` with a pattern that
   matches your own shell command.
 
