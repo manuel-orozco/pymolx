@@ -1003,6 +1003,12 @@ class PyMOLDesktopGUI(object):
 
     _recent_filenames_db = None
 
+    # pymolx: File > Open Recent shows (and the database keeps) this many
+    RECENT_FILES_MAX = 20
+    # newest first; files opened in the same second (timestamps have one
+    # second resolution) by insertion order: REPLACE always inserts anew
+    _RECENT_ORDER = 'ORDER BY timestamp DESC, rowid DESC'
+
     def _recent_filenames_lazy_init(self):
         '''Lazy initialization of the recent files database. Returns True
         on success or if the database has already been initialized.
@@ -1040,7 +1046,8 @@ class PyMOLDesktopGUI(object):
             return []
         c = self._recent_filenames_db.cursor()
         return [row[0] for row in c.execute(
-            'SELECT filename FROM recent ORDER BY timestamp DESC')]
+            'SELECT filename FROM recent %s LIMIT ?' % self._RECENT_ORDER,
+            (self.RECENT_FILES_MAX,))]
 
     def recent_filenames_add(self, filename):
         '''Register a file name as a "recently opened file"'''
@@ -1050,12 +1057,10 @@ class PyMOLDesktopGUI(object):
         c = self._recent_filenames_db.cursor()
         c.execute("REPLACE INTO recent VALUES (?, datetime('now'))", (filename,))
 
-        # keep number reasonable (this could be a one-liner if sqlite is
-        # compiled with SQLITE_ENABLE_UPDATE_DELETE_LIMIT)
-        if c.execute('SELECT COUNT(*) FROM recent').fetchone()[0] > 20:
-            c.execute('DELETE FROM recent WHERE timestamp < ?',
-                    c.execute('SELECT timestamp from recent '
-                        'ORDER BY timestamp DESC '
-                        'LIMIT 1 OFFSET 15').fetchone())
+        # pymolx: keep exactly the RECENT_FILES_MAX newest (upstream cut
+        # back to 16 once there were more than 20, by timestamp only)
+        c.execute('DELETE FROM recent WHERE rowid NOT IN '
+                  '(SELECT rowid FROM recent %s LIMIT ?)' % self._RECENT_ORDER,
+                  (self.RECENT_FILES_MAX,))
 
         self._recent_filenames_db.commit()

@@ -12,6 +12,7 @@ import pymol
 import pymol._gui
 import pymolx.branding
 import pymolx.gui.content_panel
+import pymolx.gui.scripts
 import pymolx.gui.sequence_viewer
 import pymolx.gui.theme
 import pymolx.gui.toolbar
@@ -314,6 +315,8 @@ PyMOL> color ye<TAB>    (will autocomplete "yellow")
 
         # pymolx: toolbar replaces the upstream quick buttons
         self.toolbar = pymolx.gui.toolbar.setup(self)
+        # pymolx: "Scripts" in the menu bar opens the scripts folder
+        self.scripts_action = pymolx.gui.scripts.setup(self)
         # pymolx: object panel and command prompt in Qt instead of OpenGL
         self.content_panel = pymolx.gui.content_panel.setup(self)
         # pymolx: sequence viewer in Qt instead of OpenGL

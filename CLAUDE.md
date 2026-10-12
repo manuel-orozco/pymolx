@@ -69,7 +69,11 @@ used in code and commits: [INCENTIVE_PARITY.md](INCENTIVE_PARITY.md).
   wizard panel, state bar and toggle toolbar (`gui/content_panel.py`),
   mouse mode menu (`gui/mouse_modes.py`), sequence viewer dock above the
   viewer (`gui/sequence_viewer.py`, data in `pymolx/sequence.py`).
-  Output/command line is the bottom dock `window.ext_window`.
+  Output/command line is the bottom dock `window.ext_window`. "Scripts"
+  in the menu bar (`gui/scripts.py`) is File > Run Script... starting in
+  `scripts/` of the source
+  checkout: `setup.py` writes its path to the installed
+  `pymolx/_source.py` (`pymolx.paths`).
 
 ## Gotchas found the hard way
 
@@ -102,6 +106,9 @@ used in code and commits: [INCENTIVE_PARITY.md](INCENTIVE_PARITY.md).
   `pymolx.undo` (one undo step). Wrap commands before `undo.install` and
   update `_self.keyword` entries too. Atoms without coordinates: selection
   keyword `present` excludes them; `count_atoms` includes them.
+- Never `import pymolx...` inside `execapp()` (pymol_qt_gui): it makes
+  `pymolx` a local name there and the GUI doesn't start; import at the
+  top of the file.
 - Kill test processes by PID, never `pkill -f` with a pattern that
   matches your own shell command.
 

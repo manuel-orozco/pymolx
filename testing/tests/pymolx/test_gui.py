@@ -282,3 +282,10 @@ def test_one_text_size_no_bold(app):
     bold = [m.group(1).strip().split('\n')[-1] for m in re.finditer(
         r'([^{}]*)\{[^}]*font-weight:\s*bold', qss)]
     assert bold == ['QLabel#wizard_title']
+
+
+def test_gui_startup_has_no_local_pymolx_name():
+    # an "import pymolx..." inside execapp() made "pymolx" a local name
+    # there and the GUI failed to start (UnboundLocalError)
+    from pmg_qt import pymol_qt_gui
+    assert 'pymolx' not in pymol_qt_gui.execapp.__code__.co_varnames
