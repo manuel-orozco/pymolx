@@ -11,7 +11,19 @@ Only add a value after confirming it side by side with Incentive PyMOL
 
 DEFAULTS = {
     # 'setting_name': value,
+    'stick_radius': 0.15,  # owner's choice (PyMOL: 0.25)
+    'line_width': 1.0,     # owner's choice, pixels (PyMOL: 1.49); thinner
+                           # cylinder lines break up into dashes
+    # selected atoms: light cyan dots, like Maestro (Executive.cpp draws
+    # round indicators as cyan dots; square ones stay PyMOL's pink)
+    'selection_round_points': 1,
+    # new objects: grey carbons, others by element (AtomInfo.cpp uses
+    # grey60 when auto_color is off), like Maestro
+    'auto_color': 0,
 }
+# Display > Lighting > Softer (owner's choice; PyMOL's own is "classic")
+from .lighting import DEFAULT_PRESET as _LIGHTING, PRESETS as _PRESETS
+DEFAULTS.update(_PRESETS[_LIGHTING])
 
 # Display > Quality level (util.performance mode) applied before DEFAULTS:
 # 0 = Maximum Quality (owner's choice), None = leave PyMOL's defaults.

@@ -13,7 +13,7 @@ from pymol.shortcut import Shortcut
 # all presets set the same settings, so they can be switched freely
 PRESETS = {
     # PyMOL's own values
-    'default': dict(light_count=2, spec_count=-1, specular=1.0,
+    'classic': dict(light_count=2, spec_count=-1, specular=1.0,
                     shininess=55.0, ambient=0.14, direct=0.45, reflect=0.45),
     'soft': dict(light_count=4, spec_count=1, specular=0.3, shininess=20.0,
                  ambient=0.3, direct=0.35, reflect=0.35),
@@ -24,10 +24,14 @@ PRESETS = {
                     shininess=10.0, ambient=0.5, direct=0.2, reflect=0.25),
 }
 
+# pymolx's startup lighting (owner's choice; pymolx.defaults applies it),
+# also what "lighting default" gives
+DEFAULT_PRESET = 'softer'
+
 OCCLUSION_MODE = 1        # ambient_occlusion_mode: by atom neighbors
 OCCLUSION_STRENGTH = 15.0  # ambient_occlusion_scale (PyMOL's own: 25)
 
-preset_sc = Shortcut(PRESETS)
+preset_sc = Shortcut(list(PRESETS) + ['default'])
 onoff_sc = Shortcut(['on', 'off'])
 
 
@@ -45,7 +49,8 @@ USAGE
 
 ARGUMENTS
 
-    preset = default, soft, softer or softest (no shine) {default: default}
+    preset = default (= softer, pymolx's startup lighting), classic
+    (PyMOL's own), soft, softer or softest (no shine) {default: default}
 
 EXAMPLE
 
@@ -58,6 +63,8 @@ SEE ALSO
     '''
     name = preset_sc.auto_err(str(preset).strip() or 'default',
                               'lighting preset')
+    if name == 'default':
+        name = DEFAULT_PRESET
     for setting, value in PRESETS[name].items():
         _self.set(setting, value, quiet=1)
     if not int(quiet):

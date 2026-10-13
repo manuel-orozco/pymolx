@@ -10,6 +10,9 @@
 #include"P.h"
 #include "Err.h"
 #include "Picking.h"
+#include "Executive.h"     // pymolx: hover highlighting
+#include "ObjectMolecule.h"
+#include "Rep.h"
 #include "Feedback.h"
 
 #define cRange 7
@@ -35,6 +38,76 @@ int SceneDoXYPick(PyMOLGlobals * G, int x, int y, ClickSide click_side)
   SceneRender(G, renderInfo);
   return (I->LastPicked.context.object != nullptr);
   /* did we pick something? */
+}
+
+/**
+ * pymolx: the atom under (x, y), for hover highlighting (parity item L-22).
+ * Like a click's pick, but the last click's pick (LastPicked) is kept.
+ * Needs a current OpenGL context.
+ *
+ * @param[out] object molecular object of the atom
+ * @param[out] index atom index in the object (0-based)
+ * @return false if no atom of a molecular object is there
+ */
+bool SceneHoverPick(PyMOLGlobals* G, int x, int y,
+    pymol::CObject** object, unsigned* index)
+{
+  CScene* I = G->Scene;
+  const Picking saved = I->LastPicked;
+  bool found = SceneDoXYPick(G, x, y, ClickSide::None) &&
+               I->LastPicked.context.object &&
+               I->LastPicked.context.object->type == cObjectMolecule;
+  if (found) {
+    *object = I->LastPicked.context.object;
+    *index = I->LastPicked.src.index;
+  }
+  I->LastPicked = saved;
+  // the pick pass drew into the frame buffer: redraw the scene
+  SceneInvalidate(G);
+  return found;
+}
+
+// pymolx: how much lighter hovered atoms get (0: not, 1: white)
+static const float cHoverLighten = 0.65f;
+
+void SceneHoverTint(
+    PyMOLGlobals* G, const pymol::CObject* obj, unsigned atm, float* rgb)
+{
+  const CScene* I = G->Scene;
+  if (obj != I->HoverObject || atm >= I->HoverAtoms.size() ||
+      !I->HoverAtoms[atm])
+    return;
+  for (int i = 0; i < 3; ++i)
+    rgb[i] += (1.f - rgb[i]) * cHoverLighten;
+}
+
+static void SceneHoverInvalidate(PyMOLGlobals* G, const pymol::CObject* obj)
+{
+  // the object may be gone since it was hovered
+  auto mol = const_cast<pymol::CObject*>(obj);
+  if (!obj || !ExecutiveValidateObjectPtr(G, mol, cObjectMolecule))
+    return;
+  mol->invalidate(cRepLine, cRepInvColor, -1);
+  mol->invalidate(cRepCyl, cRepInvColor, -1);
+}
+
+void SceneSetHoverAtoms(
+    PyMOLGlobals* G, pymol::CObject* obj, const std::vector<int>& atoms)
+{
+  CScene* I = G->Scene;
+  const pymol::CObject* old = I->HoverObject;
+  auto mol = (obj && obj->type == cObjectMolecule)
+                 ? static_cast<ObjectMolecule*>(obj)
+                 : nullptr;
+  I->HoverObject = (mol && !atoms.empty()) ? obj : nullptr;
+  I->HoverAtoms.assign(I->HoverObject ? mol->NAtom : 0, false);
+  for (int atm : atoms) {
+    if (I->HoverObject && atm >= 0 && atm < mol->NAtom)
+      I->HoverAtoms[atm] = true;
+  }
+  SceneHoverInvalidate(G, old);
+  if (I->HoverObject != old)
+    SceneHoverInvalidate(G, I->HoverObject);
 }
 
 /**

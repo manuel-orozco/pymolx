@@ -489,9 +489,9 @@ class PyMOLDesktopGUI(object):
                 ]),
                 # pymolx: lighting presets and ambient occlusion
                 ('menu', 'Lighting', [
-                    ('command', 'Default',                  'lighting default'),
+                    ('command', 'Classic PyMOL',            'lighting classic'),
                     ('command', 'Soft',                     'lighting soft'),
-                    ('command', 'Softer',                   'lighting softer'),
+                    ('command', 'Softer (Default)',         'lighting softer'),
                     ('command', 'Softest (Matte)',          'lighting softest'),
                 ]),
                 ('menu', 'Occlusion', [

@@ -111,6 +111,10 @@ class CScene : public Block {
   float LastSweepX{}, LastSweepY{};
   int RockFrame{};
   Picking LastPicked{};
+  // pymolx: hover highlighting, lighter colors for these atoms of
+  // HoverObject in lines and sticks (SceneHoverTint)
+  const pymol::CObject* HoverObject = nullptr;
+  std::vector<bool> HoverAtoms;
   int StereoMode{};
   OrthoLineType vendor{}, renderer{}, version{};
   bool SculptingFlag{};

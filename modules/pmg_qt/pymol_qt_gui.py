@@ -12,6 +12,7 @@ import pymol
 import pymol._gui
 import pymolx.branding
 import pymolx.gui.content_panel
+import pymolx.gui.hover
 import pymolx.gui.scripts
 import pymolx.gui.sequence_viewer
 import pymolx.gui.theme
@@ -321,6 +322,8 @@ PyMOL> color ye<TAB>    (will autocomplete "yellow")
         self.content_panel = pymolx.gui.content_panel.setup(self)
         # pymolx: sequence viewer in Qt instead of OpenGL
         self.sequence_viewer = pymolx.gui.sequence_viewer.setup(self)
+        # pymolx: highlight what's under the mouse pointer (like Maestro)
+        self.hover_highlighter = pymolx.gui.hover.setup(self)
         # pymolx: multi-level undo, one step per event loop turn
         pymolx.undo.enable_for_gui(
             lambda close: QtCore.QTimer.singleShot(0, close))

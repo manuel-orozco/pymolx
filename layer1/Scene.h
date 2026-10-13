@@ -315,6 +315,17 @@ void SceneInvalidatePicking(PyMOLGlobals * G);
 
 pymol::Image* SceneImagePrepare(PyMOLGlobals * G, bool prior_only);
 
+// pymolx: atom under (x, y) without touching the click pick (hover)
+bool SceneHoverPick(PyMOLGlobals* G, int x, int y,
+    pymol::CObject** object, unsigned* index);
+// pymolx: hover highlighting: these atoms of obj (0-based indices) get
+// lighter colors in lines and sticks; obj nullptr: none
+void SceneSetHoverAtoms(
+    PyMOLGlobals* G, pymol::CObject* obj, const std::vector<int>& atoms);
+// pymolx: lighten rgb if the atom is hovered (called by RepWireBond and
+// RepCylBond when they build their colors)
+void SceneHoverTint(
+    PyMOLGlobals* G, const pymol::CObject* obj, unsigned atm, float* rgb);
 void SceneDoRoving(PyMOLGlobals * G, float old_front,
                    float old_back, float old_origin,
                    int adjust_flag, int zoom_flag);

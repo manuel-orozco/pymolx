@@ -7,6 +7,7 @@ pymolx.gui.sequence_viewer.
 '''
 
 import bisect
+import contextlib
 
 from pymol import cmd, _cmd
 
@@ -326,13 +327,38 @@ def one_letter(resn, oneletter=''):
     return _NUCLEIC_CODES.get(resn) or oneletter or '?'
 
 
+# counter changes made inside uncounted() blocks (e.g. hover highlights)
+_ignored = [0, 0]
+_uncounted_depth = [0]
+
+
 def get_change_counts(*, _self=cmd):
     '''
     :return: (changed, dirty) counters of the core: "changed" grows when
         residues, colors or objects may have changed, "dirty" when
-        selections may have changed
+        selections may have changed; changes in uncounted() blocks left
+        out
     '''
-    return _cmd.get_seq_change_counts(_self._COb)
+    changed, dirty = _cmd.get_seq_change_counts(_self._COb)
+    return changed - _ignored[0], dirty - _ignored[1]
+
+
+@contextlib.contextmanager
+def uncounted(*, _self=cmd):
+    '''
+    Changes inside don't concern the sequence viewer (e.g. the hover
+    highlight object): it doesn't rebuild for them.
+    '''
+    _uncounted_depth[0] += 1
+    before = _cmd.get_seq_change_counts(_self._COb)
+    try:
+        yield
+    finally:
+        _uncounted_depth[0] -= 1
+        if not _uncounted_depth[0]:  # nested blocks: count once
+            after = _cmd.get_seq_change_counts(_self._COb)
+            _ignored[0] += after[0] - before[0]
+            _ignored[1] += after[1] - before[1]
 
 
 def _shown_objects(_self):

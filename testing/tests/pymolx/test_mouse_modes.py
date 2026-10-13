@@ -38,8 +38,9 @@ def test_action_labels():
 
 def test_controls_table_viewing():
     table = mouse_modes.controls_table('three_button_viewing')
+    # owner's choice (PyMOL: Rota, Move, MovZ, Slab)
     assert [table[('', c)] for c in ('L', 'M', 'R', 'Wheel')] == [
-        'Rota', 'Move', 'MovZ', 'Slab']
+        'Rota', 'Slab', 'Move', 'IMvZ']  # wheel up: zoom in
     assert table[('Single Click', 'L')] == '+/-'  # toggle selection
     assert table[('Single Click', 'R')] == 'Menu'
     assert ('Single Click', 'Wheel') not in table

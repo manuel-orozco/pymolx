@@ -186,16 +186,31 @@ def test_mutagenesis_unharmed_by_missing_residues():
     cmd.load(os.path.join(DATA, '1oky.pdb.gz'))
     row = [r for r in sequence.get_rows() if r.chain == 'A'][0]
     grey = [r for r in row.residues if not r.present][0]
-    modeled = [r for r in row.residues if r.present and r.polymer][3]
     cmd.wizard('mutagenesis')
     try:
         sequence.select_residues([grey])  # used to raise in the wizard
         assert cmd.count_atoms('sele') == 1
-        # a modeled residue: the wizard takes (and deletes) the selection;
-        # the click is still reported
+    finally:
+        cmd.set_wizard()
+
+
+def test_click_reported_when_a_wizard_takes_the_selection():
+    # like mutagenesis: the wizard uses and deletes the selection; the
+    # click is still reported
+    import io, contextlib
+    from pymol.wizard import Wizard
+
+    class Taker(Wizard):
+        def do_select(self, name):
+            cmd.delete(name)
+
+    cmd.load(os.path.join(DATA, '1oky.pdb.gz'))
+    row = [r for r in sequence.get_rows() if r.chain == 'A'][0]
+    modeled = [r for r in row.residues if r.present and r.polymer][3]
+    cmd.set_wizard(Taker(_self=cmd))
+    try:
         sequence.select_residues([modeled])
-        assert cmd.count_states('mutation') > 1
-        import io, contextlib
+        assert 'sele' not in cmd.get_names('selections')
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             sequence.report_selection(sequence.describe_residues([modeled]),

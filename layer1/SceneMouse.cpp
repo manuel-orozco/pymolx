@@ -848,6 +848,7 @@ void SceneClick(Block* block, int button, int x, int y, int mod, double when)
     case cButModeClipNF:
     case cButModeClipN:
     case cButModeClipF:
+    case cButModeScaleSlab: // pymolx: slab by dragging
     case cButModeRotZ:
     case cButModeInvRotZ:
     case cButModeRotL:
@@ -1766,6 +1767,7 @@ void SceneDrag(Block* block, int x, int y, int mod, double when)
     case cButModeClipNF:
     case cButModeClipN:
     case cButModeClipF:
+    case cButModeScaleSlab: // pymolx: slab by dragging
     case cButModeRotL:
     case cButModeMovL:
     case cButModeMvzL:
@@ -1952,6 +1954,16 @@ void SceneDrag(Block* block, int x, int y, int mod, double when)
           I->LastX = x;
           I->LastY = y;
           SceneClipSet(G, I->m_view.m_clip().m_front, I->m_view.m_clip().m_back);
+          moved_flag = true;
+        }
+        break;
+      case cButModeScaleSlab:
+        // pymolx: slab thickness by dragging, like the wheel (up: thicker;
+        // 70 pixels double it)
+        if (I->LastY != y) {
+          SceneClip(G, SceneClipMode::Scaling,
+              powf(1.01F, (float) (y - I->LastY)), nullptr, 0);
+          I->LastY = y;
           moved_flag = true;
         }
         break;

@@ -318,9 +318,11 @@ SEE ALSO
           ('single_left','alt', 'cent'),
           ],
         'three_button_viewing' :
+        # pymolx: middle Slab, right Move, wheel zooms, in when scrolling up
+        # (IMvZ) (owner's choice; PyMOL: middle Move, right MovZ, wheel Slab)
         [ ('l','none','rota'),
-          ('m','none','move'),
-          ('r','none','movz'),
+          ('m','none','slab'),
+          ('r','none','move'),
           ('l','shft','+Box'),
           ('m','shft','-Box'),
           ('r','shft','clip'),
@@ -333,7 +335,7 @@ SEE ALSO
           ('l','alt' ,'move'),
           ('m','alt' ,'none'),
           ('r','alt' ,'none'),
-          ('w','none','slab'),
+          ('w','none','imvz'),
           ('w','shft','movs'),
           ('w','ctrl','mvsz'),
           ('w','ctsh','movz'),

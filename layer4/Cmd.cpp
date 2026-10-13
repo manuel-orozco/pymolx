@@ -2486,6 +2486,49 @@ static PyObject* CmdAddMissingCA(PyObject* self, PyObject* args)
   return PyLong_FromLong(added);
 }
 
+/*
+ * pymolx: (object name, atom index 1-based) under the window position
+ * (x, y) in pixels from the bottom left, or None; for hover highlighting.
+ * Needs a current OpenGL context.
+ */
+static PyObject* CmdPickAt(PyObject* self, PyObject* args)
+{
+  PyMOLGlobals* G = nullptr;
+  int x, y;
+  API_SETUP_ARGS(G, self, args, "Oii", &self, &x, &y);
+  API_ASSERT(APIEnterNotModal(G));
+  pymol::CObject* object = nullptr;
+  unsigned index = 0;
+  bool found = SceneHoverPick(G, x, y, &object, &index);
+  std::string name = found ? object->Name : "";
+  APIExit(G);
+  if (!found)
+    return APIAutoNone(Py_None);
+  return Py_BuildValue("(si)", name.c_str(), int(index) + 1);
+}
+
+/*
+ * pymolx: hover highlighting: atoms (1-based indices) of an object drawn
+ * with lighter colors in lines and sticks; empty name: none
+ */
+static PyObject* CmdSetHoverAtoms(PyObject* self, PyObject* args)
+{
+  PyMOLGlobals* G = nullptr;
+  const char* name;
+  PyObject* list;
+  API_SETUP_ARGS(G, self, args, "OsO!", &self, &name, &PyList_Type, &list);
+  std::vector<int> atoms;
+  API_ASSERT(PConvFromPyObject(G, list, atoms));
+  API_ASSERT(APIEnterNotModal(G));
+  pymol::CObject* obj =
+      name[0] ? ExecutiveFindObjectMoleculeByName(G, name) : nullptr;
+  for (auto& atm : atoms)
+    atm -= 1;
+  SceneSetHoverAtoms(G, obj, atoms);
+  APIExit(G);
+  return APIAutoNone(Py_None);
+}
+
 static PyObject *CmdInterrupt(PyObject * self, PyObject * args)
 {
   PyMOLGlobals *G = nullptr;
@@ -6579,6 +6622,8 @@ static PyMethodDef Cmd_methods[] = {
   {"get_panel_list", CmdGetPanelList, METH_VARARGS},
   {"get_seq_change_counts", CmdGetSeqChangeCounts, METH_VARARGS},
   {"add_missing_ca", CmdAddMissingCA, METH_VARARGS},
+  {"pick_at", CmdPickAt, METH_VARARGS},
+  {"set_hover_atoms", CmdSetHoverAtoms, METH_VARARGS},
   {"get_object_color_index", CmdGetObjectColorIndex, METH_VARARGS},
   {"get_object_matrix", CmdGetObjectMatrix, METH_VARARGS},
   {"get_object_ttt", CmdGetObjectTTT, METH_VARARGS},

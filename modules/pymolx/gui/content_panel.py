@@ -21,6 +21,7 @@ Qt = QtCore.Qt
 
 PANEL_WIDTH = 280
 OUTPUT_HEIGHT = 220
+SHOW_OUTPUT = False  # owner's choice: just the command line at startup
 QWIDGETSIZE_MAX = (1 << 24) - 1
 REFRESH_MS = 250
 
@@ -552,6 +553,10 @@ def setup(window):
                       window.height() + OUTPUT_HEIGHT - ext_height)
         window.resizeDocks([window.ext_window], [OUTPUT_HEIGHT],
                            Qt.Orientation.Vertical)
+
+    # output pane hidden until toggled (">_"); the command line stays and
+    # the viewer gets the space
+    content.toggles.command_button.setChecked(SHOW_OUTPUT)
 
     # the window was sized for the OpenGL panel (220 pixels, if shown)
     import pymol.invocation

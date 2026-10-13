@@ -109,6 +109,16 @@ used in code and commits: [INCENTIVE_PARITY.md](INCENTIVE_PARITY.md).
 - Never `import pymolx...` inside `execapp()` (pymol_qt_gui): it makes
   `pymolx` a local name there and the GUI doesn't start; import at the
   top of the file.
+- Qt delivers mouse moves without a pressed button only to widgets with
+  `setMouseTracking(True)`; `QTest.mouseMove` may not reach the real GL
+  view, send `QMouseEvent`s to it instead.
+- GUI test scripts run with the owner's real plugin preferences: swap in
+  `MemoryPrefs()` before toggling anything that saves a preference.
+- Picking (`_cmd.pick_at`) draws atoms in code colors (mostly red) into
+  the frame buffer: run it only in the GL widget's `paintGL`
+  (`pymolwidget.before_draw` hooks), else Qt may show it when another
+  widget repaints (red flashes). Inside `with widget:` all the same:
+  PyMOL draws nothing without its valid-context flag, even in paintGL.
 - Kill test processes by PID, never `pkill -f` with a pattern that
   matches your own shell command.
 
@@ -121,4 +131,19 @@ used in code and commits: [INCENTIVE_PARITY.md](INCENTIVE_PARITY.md).
   startup text in the viewer (`branding.SHOW_STARTUP_TEXT`); Display > Background has Dark Navy
   `#000430` and Custom...; `interface_analysis` ΔiG is calibrated to PISA;
   Display > Quality > Maximum Quality is the default (`defaults.QUALITY`);
-  no default multisampling (tried, didn't help).
+  stick_radius 0.15 and line_width 1.0 px by default (`defaults.DEFAULTS`;
+  thinner cylinder lines break up into dashes); selected atoms shown as
+  light cyan dots (transparency 0.2) like Maestro (`selection_round_points` on; round
+  indicator texture changed in `layer3/Executive.cpp`);
+  no default multisampling (tried, didn't help); new objects get grey
+  carbons (`grey60`, via `auto_color` 0 in `defaults.DEFAULTS` and
+  `AtomInfoUpdateAutoColor`; the named color "carbon" stays green), also
+  the first entry of Color > by element; the output pane starts hidden
+  (`content_panel.SHOW_OUTPUT`), only the command line shows until ">_";
+  Display > Lighting > Softer is the startup lighting (`lighting.DEFAULT_PRESET`
+  in `defaults.DEFAULTS`; "lighting default" = softer, PyMOL's own is
+  "lighting classic", menu "Classic PyMOL"); 3-Button Viewing binds
+  middle drag Slab, right drag Move, wheel IMvZ = zoom in on scroll up
+  (`controlling.mode_dict`;
+  dragging Slab is pymolx's addition in `layer1/SceneMouse.cpp`, up =
+  thicker).

@@ -1343,7 +1343,10 @@ int AtomInfoUpdateAutoColor(PyMOLGlobals * G)
   if(SettingGetGlobal_b(G, cSetting_auto_color))
     I->CColor = ColorGetNext(G);
   else
-    I->CColor = ColorGetIndex(G, "carbon");
+    // pymolx: grey carbons for new objects (owner's choice, like Maestro;
+    // auto_color is off by default, see pymolx.defaults). Not "carbon":
+    // redefining that would recolor other people's sessions.
+    I->CColor = ColorGetIndex(G, "grey60");
   return I->CColor;
 }
 

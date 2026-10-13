@@ -400,6 +400,8 @@ def by_elem6(self_cmd, sele):
 def by_elem(self_cmd, sele):
     return [
         [ 2, 'Atoms'     ,''                               ],
+        # pymolx: grey carbons first (the default for new objects)
+        [1,'\\666C\\777H\\229N\\922O\\950S...','util.cba("grey60","'+sele+'",_self=cmd)'],
         [1,' \\777H\\229N\\922O\\950S...','util.cnc("'+sele+'",_self=cmd)'],
 
 [1,'\\292C\\777H\\229N\\922O\\950S...','util.cba(33,"'+sele+'",_self=cmd)'],# tv_green

@@ -8190,39 +8190,28 @@ static void ExecutiveRegenerateTextureForSelector(
   }
   q = temp_buffer;
   if (round_points) {
+    // pymolx: a filled light cyan dot with a smooth edge, like Maestro
+    // (upstream: pink ring around black and white rings), with
+    // transparency 0.2
+    const float opacity = 0.8f;
     for (b = 0; b < widths_arg[0]; b++) {
       disty = fabs(mid_point - b);
       for (a = 0; a < widths_arg[0]; a++) {
         distx = fabs(mid_point - a);
         dist = sqrt(distx * distx + disty * disty);
         wminusd = widths[0] - dist;
-        if (dist < widths[2]) {
-          // white
-          q[0] = q[1] = q[2] = q[3] = 255;
-        } else if (dist < widths[1]) {
-          // black
-          q[0] = q[1] = q[2] = 0;
-          q[3] = 255;
-        } else if (fabs(wminusd) < .5f) {
-          // color plus transparency
-          q[0] = 255;
-          q[1] = 51;
-          q[2] = 153;
-          q[3] = (unsigned char) ((wminusd + .5) * 255);
-        } else if (dist < widths[0]) {
-          // color (pink by default 1.f, .2f, .6f)
-          q[0] = 255;
-          q[1] = 51;
-          q[2] = 153;
-          q[3] = 255;
+        q[0] = 102;
+        q[1] = 204;
+        q[2] = 255;
+        if (wminusd >= .5f) {
+          q[3] = (unsigned char) (opacity * 255);
+        } else if (wminusd > -.5f) {
+          q[3] = (unsigned char) ((wminusd + .5f) * opacity * 255);
         } else {
-          // black
           q[0] = q[1] = q[2] = q[3] = 0;
         }
-        //	printf("%3d ", q[1]);
         q += 4;
       }
-      //      printf("\n");
     }
   } else {
     for (b = 0; b < widths_arg[0]; b++) {

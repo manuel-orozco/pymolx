@@ -793,6 +793,7 @@ Rep *RepCylBondNew(CoordSet * cs, int state)
               sbc1 = ati1->color;
             capdrawn[b1] = vdw1;
             ColorGetCheckRamped(G, sbc1, vv1, rgb1, state);
+            SceneHoverTint(G, obj, b1, rgb1);  // pymolx: hover highlighting
             CGOColorv(I->primitiveCGO, rgb1);
             CGOPickColor(I->primitiveCGO, b1, ati1->masked ? cPickableNoPick : a);
             CGOSphere(I->primitiveCGO, vv1, vdw1);
@@ -819,6 +820,9 @@ Rep *RepCylBondNew(CoordSet * cs, int state)
           bool isRamped = false;
           isRamped = ColorGetCheckRamped(G, c1, vv1, rgb1, state);
           isRamped = ColorGetCheckRamped(G, c2, vv2, rgb2, state) | isRamped;
+          // pymolx: hover highlighting
+          SceneHoverTint(G, obj, b1, rgb1);
+          SceneHoverTint(G, obj, b2, rgb2);
 
           if (ord == 0) {
             bd_radius *= valence_zero_scale;
@@ -891,6 +895,7 @@ Rep *RepCylBondNew(CoordSet * cs, int state)
       add3f(v1, v, v2);
 
       ColorGetCheckRamped(G, c1, v1, rgb1, state);
+      SceneHoverTint(G, obj, at, rgb1);  // pymolx: hover highlighting
       ok &= CGOColorv(I->primitiveCGO, rgb1);
       ok &= CGOPickColor(I->primitiveCGO, at, ai1->masked ? cPickableNoPick : cPickableAtom);
       ok &= RepCylinder(I->primitiveCGO, true, true, false, v1, v2, true, true, radius);

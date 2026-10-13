@@ -64,6 +64,10 @@ class PyMOLGLWidget(BaseGLWidget):
     def __init__(self, parent):
         self.gui = parent
         self.fb_scale = 1.0
+        # pymolx: called in paintGL right before drawing, for work that
+        # draws into the frame buffer (hover picking): the scene drawn
+        # next replaces it before Qt shows the frame
+        self.before_draw = []
 
         # OpenGL context setup
         if USE_QOPENGLWIDGET:
@@ -203,6 +207,8 @@ class PyMOLGLWidget(BaseGLWidget):
         if not USE_QOPENGLWIDGET:
             glViewport(0, 0, int(self.fb_scale * self.width()),
                          int(self.fb_scale * self.height()))
+        for func in self.before_draw:  # pymolx
+            func()
         self.pymol.draw()
         self._timer.start(0)
 

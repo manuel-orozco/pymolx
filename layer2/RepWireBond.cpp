@@ -822,6 +822,9 @@ Rep *RepWireBondNew(CoordSet * cs, int state)
           bool isRamped = false;
           isRamped = ColorGetCheckRamped(G, c1, v1, rgb1, state);
           isRamped = ColorGetCheckRamped(G, c2, v2, rgb2, state) | isRamped;
+          // pymolx: hover highlighting
+          SceneHoverTint(G, obj, b1, rgb1);
+          SceneHoverTint(G, obj, b2, rgb2);
           if (s1 || s2){
             if (ord == 0 && valence_zero_mode == 2) {
               ord = 1;

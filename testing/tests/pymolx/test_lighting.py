@@ -29,7 +29,7 @@ def test_presets(preset):
 
 def test_presets_get_softer():
     p = lighting.PRESETS
-    order = ['default', 'soft', 'softer', 'softest']
+    order = ['classic', 'soft', 'softer', 'softest']
     for name in ('light_count', 'ambient'):
         assert [p[n][name] for n in order] == sorted(p[n][name] for n in order)
     for name in ('specular', 'direct'):
@@ -40,13 +40,20 @@ def test_presets_get_softer():
     assert len({frozenset(v) for v in p.values()}) == 1
 
 
-def test_default_restores_pymol_lighting():
-    names = lighting.PRESETS['default']
-    stock = current(names)
+def test_default_is_softer_and_classic_is_pymol():
+    # pymolx starts with softer lighting (pymolx.defaults); "default" gives
+    # it back, "classic" gives PyMOL's own
+    from pymolx import defaults
+    assert lighting.DEFAULT_PRESET == 'softer'
+    softer = lighting.PRESETS['softer']
+    assert {n: defaults.DEFAULTS[n] for n in softer} == softer
     cmd.lighting('softest')
-    assert current(names) != stock
-    cmd.lighting('default')
-    assert current(names) == pytest.approx(stock)
+    assert cmd.lighting('default') == 'softer'
+    assert current(softer) == pytest.approx(softer)
+    assert cmd.lighting() == 'softer'
+    assert lighting.PRESETS['classic'] == dict(
+        light_count=2, spec_count=-1, specular=1.0, shininess=55.0,
+        ambient=0.14, direct=0.45, reflect=0.45)
 
 
 def test_command_language_and_errors():
@@ -101,14 +108,15 @@ def test_one_undo_step_each():
     cmd.undo_enable()
     try:
         before = len(undo.stack.undo_stack)
-        cmd.lighting('softer')
+        light_count = cmd.get_setting_int('light_count')
+        cmd.lighting('softest')
         cmd.occlusion('on')
         assert len(undo.stack.undo_stack) == before + 2
         cmd.undo()
         assert cmd.get_setting_int('ambient_occlusion_mode') == 0
-        assert cmd.get_setting_int('light_count') == 6
+        assert cmd.get_setting_int('light_count') == 8
         cmd.undo()
-        assert cmd.get_setting_int('light_count') == 2
+        assert cmd.get_setting_int('light_count') == light_count
     finally:
         cmd.undo_disable()
 
@@ -124,9 +132,9 @@ def test_display_menus():
     display = {item[1]: item for item in menus['Display']
                if item[0] == 'menu'}
     items = {item[1]: item[2] for item in display['Lighting'][2]}
-    assert items == {'Default': 'lighting default',
+    assert items == {'Classic PyMOL': 'lighting classic',
                      'Soft': 'lighting soft',
-                     'Softer': 'lighting softer',
+                     'Softer (Default)': 'lighting softer',
                      'Softest (Matte)': 'lighting softest'}
     items = {item[1]: item[2] for item in display['Occlusion'][2]}
     assert items == {'On (Surfaces)': 'occlusion on', 'Off': 'occlusion off'}

@@ -121,6 +121,64 @@ def test_defaults_apply_revert(monkeypatch):
     assert not defaults.revert(cmd)
 
 
+def test_default_stick_and_line_sizes(monkeypatch):
+    # owner's choices; (the full suite reverts pymolx defaults, so apply
+    # them here rather than relying on startup)
+    assert defaults.DEFAULTS['stick_radius'] == 0.15
+    assert defaults.DEFAULTS['line_width'] == 1.0
+    # selected atoms as cyan dots (round indicators, Executive.cpp)
+    assert defaults.DEFAULTS['selection_round_points'] == 1
+    monkeypatch.setattr(defaults, 'QUALITY', None)
+    monkeypatch.setattr(defaults, '_replaced', {})
+    cmd.set('stick_radius', 0.25)
+    cmd.set('line_width', 1.49)
+    defaults.apply(cmd)
+    assert cmd.get_setting_float('stick_radius') == pytest.approx(0.15)
+    assert cmd.get_setting_float('line_width') == pytest.approx(1.0)
+    assert defaults.revert(cmd)
+    assert cmd.get_setting_float('stick_radius') == pytest.approx(0.25)
+    assert cmd.get_setting_float('line_width') == pytest.approx(1.49)
+
+
+def test_default_grey_carbons(monkeypatch):
+    # owner's choice: new objects get grey carbons (grey60) and element
+    # colors for the rest, like Color > by element > first entry
+    from pymol import menu
+    assert defaults.DEFAULTS['auto_color'] == 0
+    monkeypatch.setattr(defaults, 'QUALITY', None)
+    monkeypatch.setattr(defaults, '_replaced', {})
+    cmd.reinitialize()
+    try:
+        cmd.set('auto_color', 1)
+        defaults.apply(cmd)
+        grey = cmd.get_color_index('grey60')
+        cmd.fragment('his', 'one')
+        cmd.fragment('cys', 'two')
+        for name in ('one', 'two'):
+            colors = {}
+            cmd.iterate(name, 'colors[elem] = color', space={'colors': colors})
+            assert colors['C'] == grey
+            assert colors['N'] == cmd.get_color_index('nitrogen')
+            assert colors['H'] == cmd.get_color_index('hydrogen')
+        # the named color "carbon" is untouched
+        assert cmd.get_color_tuple('carbon') == pytest.approx((0.2, 1.0, 0.2))
+
+        # the menu's first entry does the same to existing atoms
+        entry = menu.by_elem(cmd, 'two')[1]
+        assert entry[1].startswith('\\666C')
+        cmd.color('green', 'two')
+        exec(entry[2], {'util': __import__('pymol.util').util, 'cmd': cmd})
+        colors = {}
+        cmd.iterate('two', 'colors[elem] = color', space={'colors': colors})
+        assert colors['C'] == grey
+        assert colors['S'] == cmd.get_color_index('sulfur')
+
+        assert defaults.revert(cmd)
+        assert cmd.get_setting_int('auto_color') == 1
+    finally:
+        cmd.reinitialize()
+
+
 def test_default_quality_is_maximum(monkeypatch, capsys):
     # like Display > Quality > Maximum Quality, quietly, and revertible
     from pymol import util

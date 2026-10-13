@@ -236,12 +236,15 @@ def test_toggles(window):
     assert cmd.get_setting_int('seq_view') == 0
     toggles.seq_button.click()
 
-    assert toggles.command_button.isChecked()
-    toggles.command_button.click()
+    # output hidden by default (owner's choice), the command line stays
+    assert not toggles.command_button.isChecked()
     assert window.browser.isHidden()
     assert not window.lineedit.isHidden()
     toggles.command_button.click()
     assert not window.browser.isHidden()
+    toggles.command_button.click()
+    assert window.browser.isHidden()
+    assert not window.lineedit.isHidden()
 
     cmd.mouse('three_button_editing')
     fire_setting_callbacks(window)
