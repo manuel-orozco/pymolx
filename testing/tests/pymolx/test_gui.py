@@ -281,7 +281,8 @@ def test_one_text_size_no_bold(app):
     assert sizes == {'%dpt' % theme.FONT_SIZE, '8px', '15px'}  # 2 symbols
     bold = [m.group(1).strip().split('\n')[-1] for m in re.finditer(
         r'([^{}]*)\{[^}]*font-weight:\s*bold', qss)]
-    assert bold == ['QLabel#wizard_title']
+    # titles: the wizard's, Structure Preparation's workflow steps
+    assert bold == ['QLabel#wizard_title', 'QGroupBox#prep_step::title']
 
 
 def test_gui_startup_has_no_local_pymolx_name():

@@ -45,6 +45,7 @@ Z* -------------------------------------------------------------------
 
 struct CAtomInfo {
   int NColor{}, CColor{}, DColor{}, HColor{}, OColor{}, SColor{};
+  int HColorWhite{}; // pymolx: hydrogens while auto_color is off
   int BrColor{}, ClColor{}, FColor{}, IColor{};
   int PColor{}, MgColor{}, MnColor{}, NaColor{}, KColor{}, CaColor{};
   int CuColor{}, FeColor{}, ZnColor{};
@@ -1346,7 +1347,7 @@ int AtomInfoUpdateAutoColor(PyMOLGlobals * G)
     // pymolx: grey carbons for new objects (owner's choice, like Maestro;
     // auto_color is off by default, see pymolx.defaults). Not "carbon":
     // redefining that would recolor other people's sessions.
-    I->CColor = ColorGetIndex(G, "grey60");
+    I->CColor = ColorGetIndex(G, "grey70");
   return I->CColor;
 }
 
@@ -1360,6 +1361,7 @@ void AtomInfoPrimeColors(PyMOLGlobals * G)
   I->CColor = ColorGetIndex(G, "carbon");
 
   I->HColor = ColorGetIndex(G, "hydrogen");
+  I->HColorWhite = ColorGetIndex(G, "white");
   I->OColor = ColorGetIndex(G, "oxygen");
   I->SColor = ColorGetIndex(G, "sulfur");
 
@@ -1922,6 +1924,10 @@ int AtomInfoGetColor(PyMOLGlobals * G, const AtomInfoType * at1)
     case cAN_H:
       if (at1->elem[0] == 'D')
         return G->AtomInfo->DColor;
+      // pymolx: white hydrogens with the grey carbons (auto_color off,
+      // owner's choice); "hydrogen" itself stays 0.9 grey
+      if (!SettingGetGlobal_b(G, cSetting_auto_color))
+        return G->AtomInfo->HColorWhite;
       return G->AtomInfo->HColor;
     case cAN_N: return G->AtomInfo->NColor;
     case cAN_C: return G->AtomInfo->CColor;

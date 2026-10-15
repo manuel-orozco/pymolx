@@ -30,6 +30,10 @@ COLORS = {
     'all_h': '#816eb7',
     'all_l': '#837dc5',
     'all_c': '#54bd41',
+    # RMSD heatmap (RMSD Clustering): low to high RMSD
+    'heat_low': '#2b1a5c',
+    'heat_mid': '#9b81fd',
+    'heat_high': '#f2efe6',
 }
 
 # all GUI text (menus, toolbars, panels, dialogs, output, command line,

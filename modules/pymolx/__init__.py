@@ -19,9 +19,13 @@ def _init(_self):
     Called once from pymol/__init__.py after the "cmd" module is set up.
     Feature modules which replace Incentive-only stubs get imported here.
     '''
-    from . import info, undo, interfaces, mm, lighting, missing
+    from . import info, undo, interfaces, mm, lighting, missing, prep
+    from . import diagnostics, cluster
     info.extend(_self)
     mm.extend(_self)  # before undo.install: one undo step per call
+    prep.extend(_self)
+    diagnostics.extend(_self)
+    cluster.extend(_self)
     lighting.extend(_self)
     missing.install(_self)  # "load" keeps PDB REMARK 465 residues
     undo.install(_self)

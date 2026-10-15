@@ -161,43 +161,7 @@ def test_fix_then_minimize_keeps_names():
     assert report['energy_after'] < report['energy_before']
 
 
-# dialog
-
-def test_dialog():
-    QtWidgets = pytest.importorskip('pymol.Qt').QtWidgets
-    if QtWidgets.QApplication.instance() is None:
-        os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
-        QtWidgets.QApplication(['pymolx-test'])
-    import pymol.plugins  # noqa: F401 (adds the startup plugin path)
-    from pmg_tk.startup.structure_prep_gui.main import StructurePrepDialog
-
-    peptide()
-    dialog = StructurePrepDialog(None, _self=cmd)
-    try:
-        dialog.refresh()
-        dialog.selection.setEditText('pep')
-        dialog.fix()
-        assert 'pep_fixed' in cmd.get_names()
-        assert dialog.selection.currentText() == 'pep_fixed'
-
-        before = coords('pep_fixed')
-        dialog.platform.setCurrentText('CPU')
-        dialog.max_iterations.setValue(50)
-        dialog.minimize()
-        assert dialog.thread is not None
-        assert not dialog.minimize_button.isEnabled()
-        dialog.thread.wait()
-        dialog._finished()  # normally delivered by the event loop
-        assert dialog.progress.text() == 'Done'
-        assert abs(coords('pep_fixed') - before).max() > 0.01
-        assert 'energy:' in dialog.log.toPlainText()
-        assert dialog.minimize_button.isEnabled()
-
-        # CHARMM36 has no implicit solvent here: vacuum is forced
-        dialog.forcefield.setCurrentText('charmm36')
-        assert dialog.solvent.currentData() == 'vacuum'
-    finally:
-        dialog.deleteLater()
+# (the Structure Preparation dialog: test_prep.py)
 
 
 # regressions: chains renamed by OpenMM's chain-ID heuristic, and bonds

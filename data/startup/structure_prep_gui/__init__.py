@@ -1,6 +1,7 @@
 '''
-Structure Preparation plugin (pymolx): fix structures with PDBFixer and
-energy-minimize with OpenMM (pymolx.mm).
+Structure Preparation plugin (pymolx): a protein preparation workflow
+like Maestro's Protein Preparation Wizard (pymolx.prep: PDBFixer, PROPKA,
+OpenMM) and structure diagnostics (pymolx.diagnostics).
 '''
 
 

@@ -130,6 +130,12 @@ def _wrap_load(func, _self):
         before = set(_self.get_names('objects'))
         result = func(*args, **kwargs)
         try:
+            from . import files
+            files.remember(set(_self.get_names('objects')) - before,
+                           _self.exp_path(filename))
+        except Exception:
+            pass  # (only a convenience)
+        try:
             _record(filename, bound.get('object', ''),
                     str(bound.get('format', '') or ''), before, _self)
         except Exception as e:  # never break loading

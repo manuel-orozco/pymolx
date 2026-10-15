@@ -557,5 +557,28 @@ QScrollBar::add-line, QScrollBar::sub-line
     height:         0px;
 }
 
+/* Structure Preparation workflow steps (titles bold, like other titles) */
+QGroupBox#prep_step
+{
+    border:         1px solid $border;
+    border-radius:  4px;
+    margin-top:     14px;
+    padding:        6px 4px 4px 4px;
+}
+
+QGroupBox#prep_step::title
+{
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left:           8px;
+    padding:        0px 4px;
+    font-weight:    bold;
+}
+
+QLabel#prep_note
+{
+    color:          $text_dim;
+}
+
 /* vi:ft=css:expandtab:sw=4
  */

@@ -141,8 +141,9 @@ def test_default_stick_and_line_sizes(monkeypatch):
 
 
 def test_default_grey_carbons(monkeypatch):
-    # owner's choice: new objects get grey carbons (grey60) and element
-    # colors for the rest, like Color > by element > first entry
+    # owner's choice: new objects get grey carbons (grey70), white
+    # hydrogens and element colors for the rest, like Color > by element >
+    # first entry
     from pymol import menu
     assert defaults.DEFAULTS['auto_color'] == 0
     monkeypatch.setattr(defaults, 'QUALITY', None)
@@ -151,7 +152,8 @@ def test_default_grey_carbons(monkeypatch):
     try:
         cmd.set('auto_color', 1)
         defaults.apply(cmd)
-        grey = cmd.get_color_index('grey60')
+        grey = cmd.get_color_index('grey70')
+        white = cmd.get_color_index('white')
         cmd.fragment('his', 'one')
         cmd.fragment('cys', 'two')
         for name in ('one', 'two'):
@@ -159,22 +161,33 @@ def test_default_grey_carbons(monkeypatch):
             cmd.iterate(name, 'colors[elem] = color', space={'colors': colors})
             assert colors['C'] == grey
             assert colors['N'] == cmd.get_color_index('nitrogen')
-            assert colors['H'] == cmd.get_color_index('hydrogen')
-        # the named color "carbon" is untouched
+            assert colors['H'] == white
+        # the named colors "carbon" and "hydrogen" are untouched
         assert cmd.get_color_tuple('carbon') == pytest.approx((0.2, 1.0, 0.2))
+        assert cmd.get_color_tuple('hydrogen') == pytest.approx((.9, .9, .9))
 
         # the menu's first entry does the same to existing atoms
         entry = menu.by_elem(cmd, 'two')[1]
-        assert entry[1].startswith('\\666C')
+        # (no "HNOS..." entry, util.cnc: carbons unchanged)
+        assert not any('util.cnc' in str(item[2])
+                       for item in menu.by_elem(cmd, 'two'))
+        assert entry[1].startswith('\\777C\\999H')
         cmd.color('green', 'two')
         exec(entry[2], {'util': __import__('pymol.util').util, 'cmd': cmd})
         colors = {}
         cmd.iterate('two', 'colors[elem] = color', space={'colors': colors})
         assert colors['C'] == grey
+        assert colors['H'] == white
         assert colors['S'] == cmd.get_color_index('sulfur')
 
+        # PyMOL's own colors with auto_color on (the upstream test suite)
         assert defaults.revert(cmd)
         assert cmd.get_setting_int('auto_color') == 1
+        cmd.fragment('ala', 'three')
+        colors = {}
+        cmd.iterate('three', 'colors[elem] = color', space={'colors': colors})
+        assert colors['H'] == cmd.get_color_index('hydrogen')
+        assert colors['C'] != grey
     finally:
         cmd.reinitialize()
 

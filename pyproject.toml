@@ -35,10 +35,13 @@ dev = [
   "pytest==8.2.2",
   "requests==2.32.3",
 ]
-# pymolx: structure preparation and minimization (fix_structure, minimize)
+# pymolx: structure preparation and minimization (prepare_structure,
+# fix_structure, minimize; scipy for structure_diagnostics' clashes)
 mm = [
   "openmm>=8.1",
   "pdbfixer>=1.9",
+  "propka>=3.5",
+  "scipy>=1.11",
 ]
 # pymolx: libraries used by Incentive-parity features (see INCENTIVE_PARITY.md, D-03)
 science = [

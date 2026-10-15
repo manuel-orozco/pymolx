@@ -32,18 +32,38 @@ STANDARD_RESIDUES = {
     'A', 'C', 'G', 'U', 'DA', 'DC', 'DG', 'DT',
 }
 WATER = {'HOH', 'WAT', 'H2O', 'TIP3', 'SOL'}
+CAPS = {'ACE', 'NME'}
 
-FORCEFIELDS = {
-    'amber14': ['amber14-all.xml'],
-    'amber99sbildn': ['amber99sbildn.xml'],
-    'charmm36': ['charmm36.xml'],
+# force fields: their files, the water model (crystal waters, ions and
+# explicit solvent), whether OpenMM's implicit solvent models apply (AMBER
+# only) and whether they have ACE/NME caps (OpenMM's CHARMM files don't)
+FORCEFIELD_INFO = {
+    'amber14': dict(label='AMBER ff14SB', files=['amber14-all.xml'],
+                    water=('amber14/tip3pfb.xml', 'tip3p'),
+                    implicit=True, caps=True),
+    'amber19': dict(label='AMBER ff19SB', files=['amber19-all.xml'],
+                    water=('amber19/tip3pfb.xml', 'tip3p'),
+                    implicit=True, caps=True),
+    'amber99sbildn': dict(label='AMBER ff99SB-ILDN',
+                          files=['amber99sbildn.xml'],
+                          water=('tip3p.xml', 'tip3p'),
+                          implicit=True, caps=True),
+    'charmm36_2024': dict(label='CHARMM36m (2024)',
+                          files=['charmm36_2024.xml'],
+                          water=('charmm36_2024/water.xml', 'tip3p'),
+                          implicit=False, caps=False),
+    'charmm36': dict(label='CHARMM36', files=['charmm36.xml'],
+                     water=('charmm36/water.xml', 'tip3p'),
+                     implicit=False, caps=False),
 }
+FORCEFIELDS = {name: info['files'] for name, info in FORCEFIELD_INFO.items()}
+IMPLICIT_SOLVENTS = ('gbn2', 'obc2', 'hct')
 SOLVENT_MODELS = {
-    # implicit solvent files per force field family
-    'gbn2': {'amber14': 'implicit/gbn2.xml', 'amber99sbildn': 'implicit/gbn2.xml'},
-    'obc2': {'amber14': 'implicit/obc2.xml', 'amber99sbildn': 'implicit/obc2.xml'},
-    'vacuum': {},
-}
+    # implicit solvent files per force field
+    solvent: {name: 'implicit/%s.xml' % solvent
+              for name, info in FORCEFIELD_INFO.items() if info['implicit']}
+    for solvent in IMPLICIT_SOLVENTS}
+SOLVENT_MODELS['vacuum'] = {}
 RESTRAINTS = ('none', 'backbone', 'heavy')
 BACKBONE = {'N', 'CA', 'C', 'O'}
 PLATFORMS = ('CUDA', 'OpenCL', 'CPU', 'Reference')
@@ -162,11 +182,14 @@ def _export_cif(selection, state, _self):
     return '\n'.join(lines) + '\n'
 
 
-def _load_topology(topology, positions, name, b_factors, _self):
+def _load_topology(topology, positions, name, b_factors, _self,
+                   chain_map=None):
     '''
     Create a PyMOL object from an OpenMM topology with its exact bonds
     (loading a file would make PyMOL guess bonds from distances, which
     goes wrong for newly built atoms that start out close together).
+
+    :param chain_map: {topology chain ID: chain} to rename chains
     '''
     from chempy import models, Atom, Bond
     from openmm import unit
@@ -182,8 +205,11 @@ def _load_topology(topology, positions, name, b_factors, _self):
         a.resi = _residue_id(residue)
         digits = residue.id.lstrip('-')
         a.resi_number = int(residue.id) if digits.isdigit() else 0
-        a.chain = a.segi = _chain_id(residue.chain)
-        a.hetatm = int(residue.name not in STANDARD_RESIDUES)
+        chain = _chain_id(residue.chain)
+        if chain_map:
+            chain = chain_map.get(chain, chain)
+        a.chain = a.segi = chain
+        a.hetatm = int(residue.name not in STANDARD_RESIDUES | CAPS)
         a.coord = [float(c) for c in xyz[atom.index]]
         a.q = 1.0
         a.b = b_factors.get((a.chain, a.resi, a.name), 0.0)
@@ -195,6 +221,39 @@ def _load_topology(topology, positions, name, b_factors, _self):
         b.order = order if order in (1, 2, 3) else 1
         model.add_bond(b)
     _self.load_model(model, name, zoom=0)
+
+
+def _het_bonds(selection, state, _self):
+    '''
+    Bonds of non-polymer residues (ligands) and to them, which OpenMM
+    doesn't keep (it knows bonds of standard residues only).
+
+    :return: [((chain, resi, name), (chain, resi, name), order)]
+    '''
+    het = '((%s) and not hydro and not polymer)' % selection
+    if not _self.count_atoms(het):
+        return []
+    model = _self.get_model('%s or (neighbor %s and (%s) and not hydro)' % (
+        het, het, selection), state=state)
+    keys = [(a.chain, a.resi, a.name) for a in model.atom]
+    return [(keys[b.index[0]], keys[b.index[1]], b.order)
+            for b in model.bond]
+
+
+def _restore_bonds(name, bonds, _self):
+    '''
+    Add bonds from _het_bonds to object "name", where both atoms exist
+    '''
+    if not bonds:
+        return
+    lookup = {}
+    # ("index" is an atom property in iterate: another name for the dict)
+    _self.iterate('%' + name, 'lookup[(chain, resi, name)] = index',
+                  space={'lookup': lookup})
+    for a, b, order in bonds:
+        if a in lookup and b in lookup:
+            _self.bond('%%%s and index %d' % (name, lookup[a]),
+                       '%%%s and index %d' % (name, lookup[b]), order, quiet=1)
 
 
 def _sequences_from_source(source):
@@ -327,8 +386,10 @@ SEE ALSO
     _self.iterate_state(state, '(%s)' % selection,
                         'b_factors[(chain, resi, name)] = b',
                         space={'b_factors': b_factors})
+    het_bonds = _het_bonds(selection, state, _self)
     _self.delete(name)
     _load_topology(fixer.topology, fixer.positions, name, b_factors, _self)
+    _restore_bonds(name, het_bonds, _self)
     _self.disable(' '.join(objects))
 
     report['atoms_after'] = _self.count_atoms('%' + name)
@@ -622,9 +683,11 @@ ARGUMENTS
 
     selection = str: atoms to minimize {default: all}
 
-    forcefield = amber14, amber99sbildn or charmm36 {default: amber14}
+    forcefield = amber14, amber19, amber99sbildn, charmm36_2024 or
+    charmm36 {default: amber14}
 
-    solvent = gbn2, obc2 (implicit) or vacuum {default: gbn2}
+    solvent = gbn2, obc2, hct (implicit, AMBER only) or vacuum
+    {default: gbn2}
 
     restrain = none, backbone or heavy: harmonic restraints to the
     starting positions {default: backbone}
