@@ -20,17 +20,22 @@ def _init(_self):
     Feature modules which replace Incentive-only stubs get imported here.
     '''
     from . import info, undo, interfaces, mm, lighting, missing, prep
-    from . import diagnostics, cluster
+    from . import diagnostics, cluster, compare, seqcompare, pocket
     info.extend(_self)
     mm.extend(_self)  # before undo.install: one undo step per call
     prep.extend(_self)
     diagnostics.extend(_self)
     cluster.extend(_self)
+    compare.extend(_self)
+    seqcompare.extend(_self)
+    pocket.extend(_self)
     lighting.extend(_self)
     missing.install(_self)  # "load" keeps PDB REMARK 465 residues
     undo.install(_self)
     _self.extend('interface_analysis', interfaces.interface_analysis)
     _self.interface_analysis = interfaces.interface_analysis
+    _self.extend('epitope', interfaces.epitope)
+    _self.epitope = interfaces.epitope
 
 
 _startup_text = False

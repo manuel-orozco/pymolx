@@ -401,9 +401,9 @@ def test_dialog(tmp_path):
         dialog._csv_changed()
         assert dialog.best_by.currentData() == 'ranking'
         assert dialog.best_by.findData('energy') >= 0
-        assert not dialog.lower.isChecked()
+        assert not dialog.lower_better.isChecked()
         dialog.best_by.setCurrentIndex(dialog.best_by.findData('energy'))
-        assert dialog.lower.isChecked()
+        assert dialog.lower_better.isChecked()
         dialog.run()
         assert dialog.table.item(0, 5).text() == 'energy 0.000'
     finally:

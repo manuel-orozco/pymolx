@@ -46,9 +46,11 @@ NAME_COLUMNS = ('model', 'name', 'object', 'file', 'filename', 'path',
 LOWER_IS_BETTER = ('rank', 'energy', 'rmsd', 'dg', 'kcal', 'clash')
 ATOMS = {'ca': 'name CA', 'backbone': 'name N+CA+C+O',
          'heavy': 'not hydro'}
-# conserved framework motifs of antibody variable domains
-HEAVY_MOTIFS = (r'W[VIF]RQ', r'WG[QKR]G')
-LIGHT_MOTIFS = (r'W[YFL][QLR]Q', r'FG[GSTQAEP]G')
+# conserved motifs of antibody variable domains (heavy, light, VHH, scFv;
+# human and mouse): the framework 1 Cys 9-16 residues before the framework
+# 2 Trp (W-V/I/Y/F-x-Q/K/R, e.g. WVRQ, WIRK, WYQQ), later the framework 4
+# W-G-x-G (heavy) or F-G-x-G (light)
+VDOMAIN_MOTIFS = (r'C.{9,16}W[VIFLYM].[QKRE]', r'[WF]G.G')
 
 
 THREE_TO_ONE = {
@@ -79,11 +81,9 @@ def antibody_chains(obj, _self=cmd):
     '''
     chains = []
     for chain, seq in _sequences(obj, _self).items():
-        for motifs in (HEAVY_MOTIFS, LIGHT_MOTIFS):
-            first = re.search(motifs[0], seq)
-            if first and re.search(motifs[1], seq[first.end():]):
-                chains.append(chain)
-                break
+        first = re.search(VDOMAIN_MOTIFS[0], seq)
+        if first and re.search(VDOMAIN_MOTIFS[1], seq[first.end():]):
+            chains.append(chain)
     return sorted(chains)
 
 

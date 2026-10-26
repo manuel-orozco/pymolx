@@ -207,10 +207,10 @@ class ClusterDialog(QtWidgets.QDialog):
         browse.clicked.connect(self._browse_csv)
         scores_csv.addWidget(browse)
         grid.addLayout(scores_csv, 8, 1)
-        self.lower = QtWidgets.QCheckBox('Lower score is better', box)
-        self.lower.setToolTip('Set from the score\'s name (e.g. a rank or an '
+        self.lower_better = QtWidgets.QCheckBox('Lower score is better', box)
+        self.lower_better.setToolTip('Set from the score\'s name (e.g. a rank or an '
                               'energy); change it if needed')
-        grid.addWidget(self.lower, 9, 1)
+        grid.addWidget(self.lower_better, 9, 1)
         self.best_by.currentIndexChanged.connect(self._best_by_changed)
         self.superpose = QtWidgets.QCheckBox(
             'Superimpose all on the largest cluster', box)
@@ -340,7 +340,7 @@ class ClusterDialog(QtWidgets.QDialog):
                 best_by=self.best_by.currentData(),
                 scores=self.scores.text().strip(),
                 scores_csv=self.scores_csv.text().strip(),
-                higher=not self.lower.isChecked(), _self=self.cmd)
+                higher=not self.lower_better.isChecked(), _self=self.cmd)
             cluster.apply(self.result, self.superpose.isChecked(),
                           self.group.isChecked(), self.color.isChecked(),
                           _self=self.cmd)
@@ -443,7 +443,7 @@ class ClusterDialog(QtWidgets.QDialog):
                 cluster.score_label(c) for c in columns))
 
     def _best_by_changed(self, *_):
-        self.lower.setChecked(not cluster.higher_is_better(
+        self.lower_better.setChecked(not cluster.higher_is_better(
             self.best_by.currentData()))
 
     def _browse_scores(self):

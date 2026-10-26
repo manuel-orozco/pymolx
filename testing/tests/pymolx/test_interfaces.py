@@ -163,3 +163,148 @@ def test_dialog(session):
         assert any(n.startswith('iface_m_') for n in cmd.get_names('all'))
     finally:
         dialog.deleteLater()
+
+
+# epitope
+
+def buried(result, target, partners):
+    '''
+    {resi} of the target chain buried in its interfaces with the partners
+    '''
+    found = set()
+    for chains, iface in result.items():
+        if target in chains and set(chains) - {target} <= set(partners) \
+                and len(set(chains)) == 2:
+            found |= {r['resi'] for r in iface.residues
+                      if r['chain'] == target and r['bsa'] > 0}
+    return found
+
+
+def test_epitope_residues(result):
+    chains = sorted({c for pair in result for c in pair})
+    target = chains[0]
+    others = chains[1:]
+    by_chain = interfaces.contact_residues(list(result.values()), [target])
+    assert list(by_chain) == [target]
+    resis = [resi for resi, _, _ in by_chain[target]]
+    assert set(resis) == buried(result, target, others)
+    assert resis == sorted(resis, key=lambda r: int(r))  # in order
+    # more buried area asked: fewer residues
+    fewer = interfaces.contact_residues(list(result.values()), [target], 20)
+    assert 0 < len(fewer[target]) < len(resis)
+    assert all(bsa > 20 for _, _, bsa in fewer[target])
+    # the partners' side: only residues buried by the target
+    partners = interfaces.contact_residues(list(result.values()), [target],
+                                           side='partner')
+    assert target not in partners
+    for chain, residues in partners.items():
+        assert {r for r, _, _ in residues} == buried(result, chain, [target])
+
+
+def test_interfaces_between_targets_dont_count(result):
+    chains = sorted({c for pair in result for c in pair})
+    # two touching chains both as targets: their mutual interface is left
+    # out, only what the others bury counts
+    pair = next(p for p in result if len(set(p)) == 2)
+    by_chain = interfaces.contact_residues(list(result.values()), list(pair))
+    others = [c for c in chains if c not in pair]
+    for chain in pair:
+        assert {r for r, _, _ in by_chain.get(chain, [])} == \
+            buried(result, chain, others)
+
+
+def test_epitope_format():
+    residues = [('-3', 'GLY', 5.0), ('52', 'ASP', 30.0),
+                ('100A', 'TYR', 12.0), ('7', 'HOH', 1.0)]
+    assert interfaces.format_residues(residues) == 'G-3, D52, Y100A, X7'
+    assert interfaces.format_residues(residues, 'three') == \
+        'GLY-3, ASP52, TYR100A, HOH7'
+    assert interfaces.format_residues(residues, 'none') == '-3, 52, 100A, 7'
+    assert interfaces.format_epitope({'A': residues[:3]}, 'none') == \
+        '-3, 52, 100A'
+    assert interfaces.format_epitope({'A': residues[:1],
+                                      'B': residues[1:3]}) == \
+        'A: G-3\nB: D52, Y100A'
+
+
+def test_default_targets_are_the_non_antibody_chains():
+    # trastuzumab's variable domains (heavy, light), and an antigen
+    VH = ('EVQLVESGGGLVQPGGSLRLSCAASGFNIKDTYIHWVRQAPGKGLEWVARIYPTNGYTRYADS'
+          'VKGRFTISADTSKNTAYLQMNSLRAEDTAVYYCSRWGGDGFYAMDYWGQGTLVTVSS')
+    VL = ('DIQMTQSPSSLSASVGDRVTITCRASQDVNTAVAWYQQKPGKAPKLLIYSASFLYSGVPSRFS'
+          'GSRSGTDFTLTISSLQPEDFATYYCQQHYTTPPTFGQGTKVEIK')
+    ANTIGEN = 'MKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQAPILSRVGDGTQDNLSGAEKAVQVKVK'
+    cmd.reinitialize()
+    try:
+        cmd.fab(VH, 'h', chain='H')
+        cmd.fab(VL, 'l', chain='L')
+        cmd.fab(ANTIGEN, 'a', chain='A')
+        cmd.create('cpx', 'h or l or a')
+        assert interfaces.default_targets('cpx') == ['A']
+        assert interfaces.default_targets('a') == []
+    finally:
+        cmd.reinitialize()
+
+
+def test_epitope_command(session, capsys):
+    chains = sorted(cmd.get_chains('m and polymer'))
+    text = cmd.epitope('m', chains[0])
+    out = capsys.readouterr().out
+    assert 'epitope, chain %s' % chains[0] in out
+    assert text == out.splitlines()[-1].strip()
+    assert cmd.epitope('m', '%s+%s' % tuple(chains[:2]), quiet=1).startswith(
+        '%s: ' % chains[0])
+    one = cmd.epitope('m', chains[0], quiet=1).split(', ')
+    three = cmd.epitope('m', chains[0], names='three', quiet=1).split(', ')
+    plain = cmd.epitope('m', chains[0], names='none', quiet=1).split(', ')
+    assert [n[1:] for n in one] == [n[3:] for n in three] == plain
+    assert one[0][0].isalpha() and three[0][:3].isalpha()
+    with pytest.raises(ValueError, match='names'):
+        cmd.epitope('m', chains[0], names='four')
+    with pytest.raises(ValueError, match='no chain Z'):
+        cmd.epitope('m', 'Z')
+    with pytest.raises(ValueError, match='give the target'):
+        cmd.epitope('m')  # no antibody chains here
+
+
+def test_dialog_epitope_tab(session):
+    QtWidgets = pytest.importorskip('pymol.Qt').QtWidgets
+    if QtWidgets.QApplication.instance() is None:
+        os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
+        QtWidgets.QApplication(['pymolx-test'])
+    import pymol.plugins  # noqa: F401
+    from pmg_tk.startup.interface_gui.main import InterfaceDialog
+    Qt = pytest.importorskip('pymol.Qt').QtCore.Qt
+
+    dialog = InterfaceDialog(None, _self=cmd)
+    try:
+        dialog.refresh_objects()
+        dialog.analyze()
+        assert [dialog.tabs.tabText(i) for i in range(dialog.tabs.count())] \
+            == ['Residues', 'Bonds', 'Epitope']
+        chains = sorted(cmd.get_chains('m and polymer'))
+        items = [dialog.target_list.item(i)
+                 for i in range(dialog.target_list.count())]
+        assert [i.text() for i in items] == chains
+        assert dialog.targets() == []          # no antibody: none chosen
+        assert dialog.epitope_text.toPlainText() == ''
+        items[0].setCheckState(Qt.CheckState.Checked)
+        expected = cmd.epitope('m', chains[0], quiet=1)
+        assert dialog.epitope_text.toPlainText() == expected
+        assert dialog.name_style.currentData() == 'one'
+        dialog.name_style.setCurrentIndex(dialog.name_style.findData('three'))
+        assert dialog.epitope_text.toPlainText() == cmd.epitope(
+            'm', chains[0], names='three', quiet=1)
+        dialog.name_style.setCurrentIndex(dialog.name_style.findData('one'))
+        assert dialog.paratope_text.toPlainText()
+        assert dialog.epitope_summary.text().startswith(
+            '%d epitope residues' % len(expected.split(', ')))
+        dialog.min_bsa.setValue(20)
+        assert len(dialog.epitope_text.toPlainText().split(', ')) < \
+            len(expected.split(', '))
+        dialog.select_epitope()
+        assert cmd.count_atoms('epitope') > 0
+        assert cmd.count_atoms('paratope') > 0
+        assert cmd.count_atoms('epitope and not chain %s' % chains[0]) == 0
+    finally:
+        dialog.deleteLater()

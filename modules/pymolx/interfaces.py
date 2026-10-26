@@ -419,3 +419,153 @@ SEE ALSO
     if not int(quiet):
         print(format_table(obj, interfaces))
     return interfaces
+
+
+# epitope: the target's residues buried by the other chains
+
+
+def default_targets(obj, _self=cmd):
+    '''
+    Target chains: the chains that aren't antibody chains (found by their
+    framework motifs, pymolx.cluster), else none
+
+    :return: sorted chain IDs
+    '''
+    from .cluster import antibody_chains
+    chains = sorted(_self.get_chains('%%%s and polymer' % obj))
+    antibody = antibody_chains(obj, _self)
+    if not antibody or len(antibody) == len(chains):
+        return []
+    return [c for c in chains if c not in antibody]
+
+
+def _resi_sort_key(resi):
+    digits = ''.join(ch for ch in resi if ch.isdigit() or ch == '-')
+    try:
+        return (int(digits), resi)
+    except ValueError:
+        return (0, resi)
+
+
+def contact_residues(interface_list, targets, min_bsa=0.0, side='target'):
+    '''
+    Residues buried between the target chains and the others: those of
+    the targets (side "target": the epitope) or of the others ("partner":
+    the paratope). Interfaces between two target chains, or between two
+    others, don't count.
+
+    :param min_bsa: buried area a residue needs, A^2 (more than this)
+    :return: {chain: [(resi, resn, buried area)]}, residues in order
+    '''
+    targets = set(targets)
+    found = {}
+    for iface in interface_list:
+        a, b = iface.chains
+        if (a in targets) == (b in targets):
+            continue
+        for r in iface.residues:
+            if (r['chain'] in targets) != (side == 'target'):
+                continue
+            key = (r['chain'], r['resi'])
+            entry = found.setdefault(key, [r['resn'], 0.0])
+            entry[1] += r['bsa']
+    result = {}
+    for (chain, resi), (resn, bsa) in found.items():
+        if bsa > min_bsa:
+            result.setdefault(chain, []).append((resi, resn, bsa))
+    for residues in result.values():
+        residues.sort(key=lambda r: _resi_sort_key(r[0]))
+    return dict(sorted(result.items()))
+
+
+NAME_STYLES = ('one', 'three', 'none')
+
+
+def residue_label(resi, resn, names='one'):
+    '''
+    "D52" (one), "ASP52" (three) or "52" (none)
+    '''
+    if names == 'one':
+        from .cluster import THREE_TO_ONE
+        return THREE_TO_ONE.get(resn, 'X') + resi
+    if names == 'three':
+        return resn + resi
+    return resi
+
+
+def format_residues(residues, names='one'):
+    '''
+    "D52, Y53, W100A" (names "one"), "ASP52, ..." ("three") or "52, 53,
+    100A" ("none") from contact_residues' list for one chain
+    '''
+    return ', '.join(residue_label(resi, resn, names)
+                     for resi, resn, _ in residues)
+
+
+def format_epitope(by_chain, names='one'):
+    '''
+    One chain: its residues; several: one line per chain ("A: D52, Y53")
+    '''
+    if len(by_chain) == 1:
+        return format_residues(next(iter(by_chain.values())), names)
+    return '\n'.join('%s: %s' % (chain or '-',
+                                 format_residues(residues, names))
+                     for chain, residues in by_chain.items())
+
+
+def epitope(selection='', target='', min_bsa=0.0, names='one', state=-1,
+            quiet=0, *, _self=cmd):
+    '''
+DESCRIPTION
+
+    "epitope" lists the residues of the target chain(s) buried by the
+    other chains (e.g. an antigen's epitope on an antibody), from the
+    PISA-like interface analysis, separated by commas: "D52, Y53".
+
+USAGE
+
+    epitope object [, target [, min_bsa [, names [, state ]]]]
+
+ARGUMENTS
+
+    object = str: object name {default: first object}
+
+    target = str: target chain(s), e.g. "A" or "A+B" {default: the chains
+    that aren't antibody chains}
+
+    min_bsa = float: buried area a residue needs, A^2 {default: 0}
+
+    names = one (D52), three (ASP52) or none (52) {default: one}
+
+EXAMPLE
+
+    epitope model_1, A, names=three
+
+SEE ALSO
+
+    interface_analysis
+    '''
+    names = str(names).strip().lower()
+    if names not in NAME_STYLES:
+        raise ValueError('names must be one, three or none')
+    obj = selection.strip() or (_self.get_object_list() or [''])[0]
+    targets = [c for c in str(target).replace('+', ' ').split() if c] or \
+        default_targets(obj, _self)
+    if not targets:
+        raise ValueError('give the target chain(s): no antibody chains to '
+                         'tell the target from')
+    chains = set(_self.get_chains('%%%s and polymer' % obj))
+    missing = [c for c in targets if c not in chains]
+    if missing:
+        raise ValueError('no chain %s in %s' % (', '.join(missing), obj))
+    interface_list = analyze(obj, int(state), _self=_self)
+    by_chain = contact_residues(interface_list, targets, float(min_bsa))
+    if not int(quiet):
+        if not by_chain:
+            print(' epitope: no residues of %s buried by other chains' %
+                  '+'.join(targets))
+        for chain, residues in by_chain.items():
+            print(' epitope, chain %s (%d residues, %.0f A^2 buried):' % (
+                chain, len(residues), sum(r[2] for r in residues)))
+            print(' ' + format_residues(residues, names))
+    return format_epitope(by_chain, names)

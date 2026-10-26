@@ -1,5 +1,7 @@
 '''
-Interface Analysis dialog: PISA-like interface list, residues and bonds.
+Interface Analysis dialog: PISA-like interface list, residues and bonds,
+and the epitope: the residues of chosen target chains buried by the other
+chains (and the partners' residues burying them).
 '''
 
 import csv
@@ -122,6 +124,7 @@ class InterfaceDialog(QtWidgets.QDialog):
         self.bond_table.itemDoubleClicked.connect(self.zoom_bond)
         self.tabs.addTab(self.residue_table, 'Residues')
         self.tabs.addTab(self.bond_table, 'Bonds')
+        self.tabs.addTab(self._epitope_tab(), 'Epitope')
         layout.addWidget(self.tabs, 3)
 
         buttons = QtWidgets.QHBoxLayout()
@@ -142,6 +145,143 @@ class InterfaceDialog(QtWidgets.QDialog):
         layout.addWidget(note)
 
         self._update_buttons()
+
+    def _epitope_tab(self):
+        tab = QtWidgets.QWidget(self)
+        layout = QtWidgets.QVBoxLayout(tab)
+
+        top = QtWidgets.QHBoxLayout()
+        top.addWidget(QtWidgets.QLabel('Target chain(s)', tab))
+        self.target_list = QtWidgets.QListWidget(tab)
+        self.target_list.setObjectName('epitope_targets')
+        self.target_list.setFlow(QtWidgets.QListView.Flow.LeftToRight)
+        self.target_list.setWrapping(True)
+        self.target_list.setMaximumHeight(52)
+        self.target_list.setToolTip(
+            'The chain(s) whose buried residues form the epitope (by '
+            'default the chains that aren\'t antibody chains)')
+        self.target_list.itemChanged.connect(self.update_epitope)
+        top.addWidget(self.target_list, 1)
+        top.addWidget(QtWidgets.QLabel('Min. buried area', tab))
+        self.min_bsa = QtWidgets.QDoubleSpinBox(tab)
+        self.min_bsa.setRange(0.0, 200.0)
+        self.min_bsa.setDecimals(1)
+        self.min_bsa.setSingleStep(1.0)
+        self.min_bsa.setSuffix(' Å²')
+        self.min_bsa.setToolTip('Residues need more buried area than this '
+                                '(0: any, like PISA\'s interface residues)')
+        self.min_bsa.valueChanged.connect(self.update_epitope)
+        top.addWidget(self.min_bsa)
+        top.addWidget(QtWidgets.QLabel('Names', tab))
+        self.name_style = QtWidgets.QComboBox(tab)
+        for label, value in (('1-letter (D52)', 'one'),
+                             ('3-letter (ASP52)', 'three'),
+                             ('Numbers only (52)', 'none')):
+            self.name_style.addItem(label, value)
+        self.name_style.currentIndexChanged.connect(self.update_epitope)
+        top.addWidget(self.name_style)
+        layout.addLayout(top)
+
+        self.epitope_label = QtWidgets.QLabel(
+            'Epitope (target residues buried by the other chains)', tab)
+        layout.addWidget(self.epitope_label)
+        self.epitope_text, row = self._residue_box(tab)
+        layout.addLayout(row, 1)
+        self.paratope_label = QtWidgets.QLabel(
+            'Partner residues (paratope)', tab)
+        layout.addWidget(self.paratope_label)
+        self.paratope_text, row = self._residue_box(tab)
+        layout.addLayout(row, 1)
+
+        bottom = QtWidgets.QHBoxLayout()
+        self.epitope_summary = QtWidgets.QLabel(tab)
+        self.epitope_summary.setObjectName('interface_note')
+        bottom.addWidget(self.epitope_summary, 1)
+        self.select_epitope_button = QtWidgets.QPushButton(
+            'Select in Viewer', tab)
+        self.select_epitope_button.setToolTip(
+            'Selections "epitope" and "paratope"')
+        self.select_epitope_button.clicked.connect(self.select_epitope)
+        bottom.addWidget(self.select_epitope_button)
+        layout.addLayout(bottom)
+        self.epitope = {}
+        self.paratope = {}
+        return tab
+
+    def _residue_box(self, parent):
+        row = QtWidgets.QHBoxLayout()
+        text = QtWidgets.QPlainTextEdit(parent)
+        text.setReadOnly(True)
+        text.setObjectName('epitope_text')
+        row.addWidget(text, 1)
+        copy = QtWidgets.QPushButton('Copy', parent)
+        copy.clicked.connect(lambda: QtWidgets.QApplication.clipboard()
+                             .setText(text.toPlainText()))
+        row.addWidget(copy, 0, Qt.AlignmentFlag.AlignTop)
+        return text, row
+
+    def targets(self):
+        return [self.target_list.item(i).text()
+                for i in range(self.target_list.count())
+                if self.target_list.item(i).checkState() ==
+                Qt.CheckState.Checked]
+
+    def _fill_targets(self):
+        obj = self.analyzed_object
+        chains = sorted(self.cmd.get_chains('%%%s and polymer' % obj))
+        targets = interfaces.default_targets(obj, _self=self.cmd)
+        self.target_list.blockSignals(True)
+        self.target_list.clear()
+        for chain in chains:
+            item = QtWidgets.QListWidgetItem(chain, self.target_list)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Checked if chain in targets
+                               else Qt.CheckState.Unchecked)
+        self.target_list.blockSignals(False)
+
+    def update_epitope(self, *_):
+        targets = self.targets()
+        if not targets:
+            self.epitope, self.paratope = {}, {}
+            self.epitope_text.setPlainText('')
+            self.paratope_text.setPlainText('')
+            self.epitope_summary.setText('Choose the target chain(s)')
+            self.select_epitope_button.setEnabled(False)
+            return
+        min_bsa = self.min_bsa.value()
+        self.epitope = interfaces.contact_residues(
+            self.interfaces, targets, min_bsa)
+        self.paratope = interfaces.contact_residues(
+            self.interfaces, targets, min_bsa, side='partner')
+        names = self.name_style.currentData()
+        self.epitope_text.setPlainText(
+            interfaces.format_epitope(self.epitope, names))
+        self.paratope_text.setPlainText(
+            interfaces.format_epitope(self.paratope, names))
+        count = sum(len(r) for r in self.epitope.values())
+        area = sum(b for r in self.epitope.values() for _, _, b in r)
+        self.epitope_summary.setText(
+            '%d epitope residues on %s, %.0f Å² buried; %d partner '
+            'residues' % (count, '+'.join(targets), area,
+                          sum(len(r) for r in self.paratope.values()))
+            if count else 'No residues of %s buried by the other chains' %
+            '+'.join(targets))
+        self.select_epitope_button.setEnabled(bool(count))
+
+    def select_epitope(self):
+        obj = self.analyzed_object
+        for name, by_chain in (('epitope', self.epitope),
+                               ('paratope', self.paratope)):
+            parts = ['(chain "%s" and resi %s)' % (
+                chain, '+'.join(interfaces._resi(resi)
+                                for resi, _, _ in residues))
+                for chain, residues in by_chain.items()]
+            self.cmd.select(name, '%%%s and (%s)' % (
+                obj, ' or '.join(parts) or 'none'), enable=0)
+        self.cmd.enable('epitope')
+        self.cmd.zoom('epitope', 6, animate=1)
+        self.status.setText('Selected "epitope" (%d atoms) and "paratope"' %
+                            self.cmd.count_atoms('epitope'))
 
     # session
 
@@ -187,6 +327,8 @@ class InterfaceDialog(QtWidgets.QDialog):
             rows[-1][0].setData(Qt.ItemDataRole.UserRole + 1, n - 1)
         _fill(self.interface_table, rows)
         self.status.setText('%d interfaces in %s' % (len(self.interfaces), obj))
+        self._fill_targets()
+        self.update_epitope()
         if self.interfaces:
             self.interface_table.selectRow(0)
         else:

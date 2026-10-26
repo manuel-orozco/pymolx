@@ -55,7 +55,10 @@ used in code and commits: [INCENTIVE_PARITY.md](INCENTIVE_PARITY.md).
   `plugins.addmenuitemqt(...)`; dialog in `main.py`; reach the window with
   `pymol.gui.get_qtwindow()`. Examples: `alignment_gui`, `interface_gui`,
   `structure_prep_gui` (worker QThread pattern), `cluster_gui` (RMSD
-  clustering of e.g. antibody-antigen models, `pymolx.cluster`).
+  clustering of e.g. antibody-antigen models, `pymolx.cluster`),
+  `compare_gui` (similarity coloring of close relatives, `pymolx.compare`),
+  `seqcompare_gui` (the same by sequence, `pymolx.seqcompare`),
+  `pocket_gui` (residues near a ligand, `pymolx.pocket`).
 - Theme: colors only in `COLORS` (`modules/pymolx/gui/theme.py`), used as
   `$name` in `data/pymolx/styles/dark.qss` (literal `$` must be `$$`).
   Icons: `data/pymolx/icons/*.svg` (own artwork; `<name>-on.svg` = checked).
@@ -85,6 +88,9 @@ used in code and commits: [INCENTIVE_PARITY.md](INCENTIVE_PARITY.md).
   in scripts; find live menus via `QApplication.allWidgets()`.
 - PySide6: `signal.connect` returns a Connection, so `@signal.connect`
   as a decorator replaces the function; connect after defining it.
+- PySide6: an attribute named like a virtual Qt method (e.g.
+  `self.metric`, QPaintDevice::metric) replaces it: Qt calls it while
+  painting and crashes (segfault on `grab()`).
 - `cmd.do` only queues commands (run later by the C loop).
 - `iterate` variable for ATOM/HETATM is `type` (no `hetatm`).
 - Many words are selection keywords (`fixed`, `gap`, `none`, `alt`, `b`,
