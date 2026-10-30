@@ -21,6 +21,7 @@ def _init(_self):
     '''
     from . import info, undo, interfaces, mm, lighting, missing, prep
     from . import diagnostics, cluster, compare, seqcompare, pocket
+    from . import antibody
     info.extend(_self)
     mm.extend(_self)  # before undo.install: one undo step per call
     prep.extend(_self)
@@ -29,6 +30,7 @@ def _init(_self):
     compare.extend(_self)
     seqcompare.extend(_self)
     pocket.extend(_self)
+    antibody.extend(_self)
     lighting.extend(_self)
     missing.install(_self)  # "load" keeps PDB REMARK 465 residues
     undo.install(_self)

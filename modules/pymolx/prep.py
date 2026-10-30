@@ -45,6 +45,15 @@ MAX_ROUNDS = 5          # minimizer restarts while some force is large
 MAX_FORCE_FACTOR = 50   # ... larger than this times the tolerance
 L_IMPROPER = 2.138      # rad, dihedral N-C-CA-CB of L-amino acids (122.5)
 L_IMPROPER_HA = -2.062  # rad, dihedral N-C-CA-HA (-118.1)
+COVERED_H = 1.0        # A: polymer H this close to a het heavy atom
+DYNAMICS_STEP = 2.0    # fs: the dynamics stage's time step
+PULL_K = 500.0         # kJ/mol/nm^2 of its pulling restraints (the
+                       # network spreads it, so it can be firm)
+ENM_K = 2000.0         # kJ/mol/nm^2 holding a moving domain's shape
+ENM_CUTOFF = 8.0       # A between the atoms it bonds
+GUARD_TOLERANCE = 0.5  # rad: chirality guard's free range around L
+DISULFIDE_FREE = 2.5   # A: chosen disulfides farther apart move freely
+DISULFIDE_FAR = 8.0    # A: ... and this far apart, noted
 
 # protonation variants (OpenMM Modeller names): (protonated, deprotonated)
 TITRATABLE = {'ASP': ('ASH', 'ASP'), 'GLU': ('GLH', 'GLU'),
@@ -245,6 +254,9 @@ class PrepJob:
                                      # by prepare_job: (chain, resi, old,
                                      # new)
         self.disulfides = True       # keep (create) disulfide bonds
+        self.disulfide_pairs = None  # or exactly these: [((chain, resi),
+                                     # (chain, resi))] (PyMOL's), made
+                                     # even if far apart, others broken
         self.metals = True           # metal sites: states, bonds, restraints
         # protonation
         self.protonate = True
@@ -262,6 +274,11 @@ class PrepJob:
         self.max_iterations = 0     # 0: until converged
         self.platform = 'auto'
         self.diagnostics = True     # (for the caller)
+        self.dynamics = None        # short dynamics of some residues after
+                                    # the minimization (_dynamics)
+        self.free_residues = set()  # (chain, resi): moved like built ones
+                                    # (not restrained, e.g. a stitched
+                                    # hinge, pymolx.antibody)
 
         self.input_text = ''
         self.chain_map = {}
@@ -344,8 +361,10 @@ class PrepJob:
                                          self.delete_hydrogens):
             self._keep_known_hydrogens(fixer, app)
         # atoms of the input: only these are restrained (built ones move)
-        self.input_atoms = {self._atom_key(a)
-                            for a in fixer.topology.atoms()}
+        self.input_atoms = {
+            self._atom_key(a) for a in fixer.topology.atoms()
+            if (self.chain_map.get(a.residue.chain.id),
+                mm._residue_id(a.residue)) not in self.free_residues}
 
         if self.preprocess:
             self._preprocess(fixer, app)
@@ -408,7 +427,9 @@ class PrepJob:
         bonds = [b for b in self.topology.bonds()
                  if b.atom1.name == 'SG' and b.atom2.name == 'SG' and
                  b.atom1.residue.name == b.atom2.residue.name == 'CYS']
-        if bonds and not self.disulfides:
+        if self.disulfide_pairs is not None:
+            bonds = self._chosen_disulfides(app, bonds, lines)
+        if bonds and not self.disulfides and self.disulfide_pairs is None:
             modeller = app.Modeller(self.topology, self.positions)
             modeller.delete(bonds)
             self.topology, self.positions = (modeller.topology,
@@ -487,6 +508,70 @@ class PrepJob:
             say('Disulfides and metal sites')
             for line in lines:
                 say(line)
+
+    def _chosen_disulfides(self, app, bonds, lines):
+        '''
+        Exactly the disulfide bonds of disulfide_pairs: others broken,
+        missing ones made; cysteines farther apart than a bond are freed
+        from the restraints (the minimization brings them together)
+
+        :return: the SG-SG bonds
+        '''
+        import numpy as np
+        from openmm import unit
+
+        def key(atom):
+            return (self.chain_map.get(atom.residue.chain.id),
+                    mm._residue_id(atom.residue))
+
+        wanted = {frozenset(((str(a[0]), str(a[1])), (str(b[0]), str(b[1]))))
+                  for a, b in self.disulfide_pairs}
+        drop = [b for b in bonds
+                if frozenset((key(b.atom1), key(b.atom2))) not in wanted]
+        if drop:
+            modeller = app.Modeller(self.topology, self.positions)
+            modeller.delete(drop)
+            self.topology, self.positions = (modeller.topology,
+                                             modeller.positions)
+            lines.append('  disulfide bonds broken (not chosen): %s' % (
+                ', '.join('%s-%s' % tuple(self._label(r) for r in sorted(
+                    (b.atom1.residue, b.atom2.residue),
+                    key=lambda r: r.index)) for b in drop)))
+        sg = {key(a): a for a in self.topology.atoms()
+              if a.name == 'SG' and a.residue.name == 'CYS'}
+        present = {frozenset((key(b.atom1), key(b.atom2)))
+                   for b in self.topology.bonds()
+                   if b.atom1.name == b.atom2.name == 'SG'}
+        xyz = np.array(self.positions.value_in_unit(unit.angstrom))
+        made = []
+        for pair in sorted(wanted, key=sorted):
+            if len(pair) < 2:
+                continue    # (the same cysteine twice)
+            a, b = sorted(pair)
+            if a not in sg or b not in sg:
+                lines.append('  disulfide %s/%s-%s/%s: no such cysteine '
+                             '(left out)' % (a + b))
+                continue
+            if pair in present:
+                continue
+            atom1, atom2 = sorted((sg[a], sg[b]), key=lambda x: x.index)
+            self.topology.addBond(atom1, atom2)
+            d = float(np.linalg.norm(xyz[atom1.index] - xyz[atom2.index]))
+            made.append('%s-%s %.1f A%s' % (
+                self._label(atom1.residue), self._label(atom2.residue), d,
+                ' (far apart: may strain the structure)'
+                if d > DISULFIDE_FAR else ''))
+            if d > DISULFIDE_FREE:
+                # both cysteines move (built-like: guided to L, trans)
+                residues = {atom1.residue, atom2.residue}
+                self.input_atoms -= {
+                    self._atom_key(x) for r in residues for x in r.atoms()}
+        if made:
+            lines.append('  disulfide bonds made (SG-SG before minimizing): '
+                         '%s' % ', '.join(made))
+        return [b for b in self.topology.bonds()
+                if b.atom1.name == 'SG' and b.atom2.name == 'SG' and
+                b.atom1.residue.name == b.atom2.residue.name == 'CYS']
 
     def _author_key(self, atom):
         '''
@@ -1292,6 +1377,7 @@ class PrepJob:
         # chirality and trans peptide bonds, in both stages (PDBFixer builds
         # residues roughly, and a strained loop may pull its neighbors)
         guide = None
+        near = set()
         built = self._built(topology)
         if built:
             # residues with built atoms and their neighbors in the chain
@@ -1335,6 +1421,31 @@ class PrepJob:
                 system.addForce(guide)
             else:
                 guide = None
+        # all other L residues: a flat-bottomed guard against inversion
+        # (seen now and then in large structures: restrained atoms pushed
+        # hard at the start flip a residue to D)
+        from .diagnostics import _dihedral
+        guard = openmm.CustomTorsionForce(
+            '0.5*k_guard*max(0, abs(w) - %r)^2; '
+            'w = d - 6.28318531*floor((d + 3.14159265)/6.28318531); '
+            'd = theta - %r' % (GUARD_TOLERANCE, L_IMPROPER))
+        guard.addGlobalParameter('k_guard', BUILD_K)
+        for residue, named in _backbone(topology):
+            if 'CB' not in named or residue.name not in AMINO_ACIDS or \
+                    residue in near:
+                continue
+            atoms = [named[k].index for k in ('N', 'C', 'CA', 'CB')]
+            angle = math.radians(_dihedral(*(
+                tuple(positions[i].value_in_unit(unit.angstrom))
+                for i in atoms)))
+            d = angle - L_IMPROPER
+            if abs(d - 2 * math.pi * math.floor((d + math.pi) /
+                                                (2 * math.pi))) < \
+                    GUARD_TOLERANCE:
+                guard.addTorsion(*atoms, [])
+        if guard.getNumTorsions():
+            guard.setForceGroup(2)
+            system.addForce(guard)
         started = time.time()
         context, platform = self._context(openmm, system, positions)
         device = ''
@@ -1411,6 +1522,13 @@ class PrepJob:
         minimize()
         e1 = energy()
 
+        if self.dynamics:
+            context = self._dynamics(openmm, unit, system, context, platform,
+                                     topology, n_structure)
+            self._step('Minimizing again...')
+            minimize()
+            e1 = energy()
+
         final = context.getState(getPositions=True).getPositions(asNumpy=True)
         final = final.value_in_unit(unit.nanometer)[:n_structure]
         start = self.positions.value_in_unit(unit.nanometer)
@@ -1468,6 +1586,155 @@ class PrepJob:
 
     # PyMOL part
 
+    def _dynamics(self, openmm, unit, system, context, platform, topology,
+                  n_structure):
+        '''
+        Short Langevin dynamics of the mobile residues, the rest held
+        where it is, with the "pull" pairs drawn together first and then
+        released so they settle (pymolx.antibody uses it to collapse a
+        fused unit's linker from its extended start). The caller minimizes
+        again afterwards.
+
+        self.dynamics: {'mobile': {(chain, resi)}, 'pull': [(anchor atom
+        (chain, resi, name), atoms pulled toward it, distance A, k)],
+        'rigid': [atoms of each group to hold in shape], 'pull_ps',
+        'settle_ps', 'temperature', 'label'}
+
+        :return: the context to carry on with (a new one)
+        '''
+        settings = self.dynamics
+        mobile = {(str(c), str(r)) for c, r in settings['mobile']}
+        atoms = list(topology.atoms())
+        index = {self._author_key(a): a.index for a in atoms}
+        masses = {}
+        for atom in atoms[:n_structure]:
+            key = self._author_key(atom)
+            if (key[0], key[1]) not in mobile:
+                masses[atom.index] = system.getParticleMass(atom.index)
+                system.setParticleMass(atom.index, 0.0)
+        if len(masses) == len(atoms[:n_structure]):
+            self._say('  dynamics: no mobile residues, left out')
+            return context
+        positions = context.getState(getPositions=True).getPositions()
+        added = 0
+        # the pulled groups keep their shape: a network of harmonic bonds
+        # between their nearby backbone atoms, so that they move as rigid
+        # bodies (their sheets' hydrogen bonds held) instead of being
+        # torn open by the pull
+        rigid = [[index[k] for k in group if k in index]
+                 for group in settings.get('rigid', ())]
+        if any(rigid):
+            import numpy as np
+            from scipy.spatial import cKDTree
+            xyz = np.array(positions.value_in_unit(unit.nanometer))
+            network = openmm.CustomBondForce('0.5*k_rigid*(r-r0)^2')
+            network.addGlobalParameter('k_rigid', ENM_K)
+            network.addPerBondParameter('r0')
+            for group in rigid:
+                tree = cKDTree(xyz[group])
+                for i, j in tree.query_pairs(ENM_CUTOFF / 10.0):
+                    a, b = group[i], group[j]
+                    network.addBond(a, b, [float(np.linalg.norm(
+                        xyz[a] - xyz[b]))])
+            system.addForce(network)
+            added += 1
+            self._say('  dynamics: %d bonds hold the moving domains in '
+                      'shape' % network.getNumBonds())
+        pull = openmm.CustomCentroidBondForce(
+            2, '0.5*k_pull*max(0, distance(g1,g2)-d0)^2')
+        pull.addGlobalParameter('k_pull', 0.0)
+        pull.addPerBondParameter('d0')
+        for a, b, distance, _ in settings.get('pull', []):
+            here = [index[k] for k in ([b] if isinstance(b, tuple) and
+                                       not isinstance(b[0], tuple) else b)
+                    if k in index]
+            if a not in index or not here:
+                continue
+            pull.addBond([pull.addGroup([index[a]], [1.0]),
+                          pull.addGroup(here, [1.0] * len(here))],
+                         [distance / 10.0])
+        pull.setForceGroup(3)
+        system.addForce(pull)
+        added += 1
+
+        # a new context: the system gained forces, and this one integrates
+        del context
+        integrator = openmm.LangevinMiddleIntegrator(
+            settings.get('temperature', 300.0) * unit.kelvin,
+            1.0 / unit.picosecond, DYNAMICS_STEP * unit.femtosecond)
+        context = openmm.Context(system, integrator,
+                                 openmm.Platform.getPlatformByName(platform))
+        context.setPositions(positions)
+        context.setVelocitiesToTemperature(
+            settings.get('temperature', 300.0) * unit.kelvin)
+        before = self._pull_spans(unit, context, pull)
+        steps = int(1000 / DYNAMICS_STEP)       # per picosecond
+        for phase, picoseconds in (('pull', settings.get('pull_ps', 0)),
+                                   ('settle', settings.get('settle_ps', 0))):
+            if not picoseconds:
+                continue
+            self._step('%s (%d ps)...' % (
+                settings.get('label', 'Dynamics'), picoseconds))
+            context.setParameter('k_pull', PULL_K if phase == 'pull' else 0.0)
+            for _ in range(int(picoseconds)):
+                integrator.step(steps)
+                self._check()
+            self._say('  dynamics, after the %s (%d ps): %s' % (
+                phase, picoseconds, ', '.join(
+                    '%.0f A' % x for x in
+                    self._pull_spans(unit, context, pull)) or '-'))
+        spans = self._pull_spans(unit, context, pull)
+        self._say('  dynamics: %d atoms moved for %d ps, %s' % (
+            sum(1 for a in atoms[:n_structure]
+                if (self._author_key(a)[0], self._author_key(a)[1])
+                in mobile),
+            settings.get('pull_ps', 0) + settings.get('settle_ps', 0),
+            'pulled together: %s' % ', '.join(
+                '%.0f to %.0f A' % pair for pair in zip(before, spans))
+            if spans else 'nothing pulled'))
+        moved = context.getState(getPositions=True).getPositions()
+        for index, mass in masses.items():
+            system.setParticleMass(index, mass)
+        for _ in range(added):               # the pull and the network
+            system.removeForce(system.getNumForces() - 1)
+        del context
+        context, _ = self._context(openmm, system, moved)
+        self.report['dynamics_ps'] = settings.get('pull_ps', 0) + \
+            settings.get('settle_ps', 0)
+        return context
+
+    @staticmethod
+    def _pull_spans(unit, context, pull):
+        '''
+        The distance of each pulling restraint, A
+        '''
+        import numpy as np
+        xyz = np.array(context.getState(getPositions=True).getPositions(
+            asNumpy=True).value_in_unit(unit.angstrom))
+        spans = []
+        for bond in range(pull.getNumBonds()):
+            groups, _ = pull.getBondParameters(bond)
+            centres = [xyz[list(pull.getGroupParameters(g)[0])].mean(axis=0)
+                       for g in groups]
+            spans.append(float(np.linalg.norm(centres[0] - centres[1])))
+        return spans
+
+    def _remove_covered_hydrogens(self, _self):
+        '''
+        Hydrogens of the polymer where a bonded het group's atom is (e.g.
+        on the ND2 of a glycosylated Asn: hydrogens are added with het
+        groups left out)
+        '''
+        sele = ('(%%%s and polymer and hydro) within %g of (%%%s and not '
+                'polymer and not solvent and not hydro)' % (
+                    self.name, COVERED_H, self.name))
+        count = _self.count_atoms(sele)
+        if count:
+            _self.remove(sele)
+            self._say('Hydrogens removed where bonded groups sit (e.g. '
+                      'glycosylated Asn): %d' % count)
+            self.report['covered_hydrogens'] = count
+
     def apply(self, _self=cmd):
         '''
         Load the result as a new object; the input objects are hidden.
@@ -1478,6 +1745,7 @@ class PrepJob:
         mm._load_topology(self.topology, self.positions, self.name,
                           self.b_factors, _self, self.chain_map)
         mm._restore_bonds(self.name, self.het_bonds, _self)
+        self._remove_covered_hydrogens(_self)
         # metal coordination: zero-order bonds (like Maestro), and dashes to
         # see them (PyMOL hardly draws zero-order bonds)
         mm._restore_bonds(self.name, self.metal_bonds, _self)
@@ -1630,6 +1898,40 @@ def parse_mutations(text):
     return found
 
 
+def parse_disulfides(text):
+    '''
+    "A/22-A/96, H/229-K/229" (chain/residue pairs); "none": no disulfide
+    bonds; empty: automatic (None)
+
+    :return: None or [((chain, resi), (chain, resi))]
+    '''
+    import re
+    text = str(text or '').strip()
+    if not text:
+        return None
+    if text.lower() == 'none':
+        return []
+    found = []
+    # ("H/229 - K/229" -> "H/229-K/229"; residue numbers may be negative)
+    text = re.sub(r'(\w)\s*-\s*', r'\1-', text)
+    for token in re.split(r'[,;\s]+', text):
+        token = token.strip()
+        if not token:
+            continue
+        match = re.fullmatch(r'([^/\s]*)/(-?\w+)\s*-\s*([^/\s]*)/(-?\w+)',
+                             token)
+        if not match:
+            raise ValueError('disulfide "%s": write chain/residue-chain/'
+                             'residue, e.g. H/229-K/229' % token)
+        a, b = (match.group(1), match.group(2)), (match.group(3),
+                                                  match.group(4))
+        if a == b:
+            raise ValueError('disulfide "%s": two different cysteines' %
+                             token)
+        found.append((a, b))
+    return found
+
+
 def _bool(value):
     if isinstance(value, str):
         return value.strip().lower() not in ('0', 'off', 'no', 'false', '')
@@ -1642,7 +1944,8 @@ def prepare_structure(selection='all', name='', preprocess=1,
                       fill_side_chains=1, replace_nonstandard=1,
                       delete_waters=0, water_distance=0.0,
                       water_min_hbonds=0, delete_heterogens=0, mutations='',
-                      disulfides=1, metals=1, protonate=1,
+                      disulfides=1, disulfide_pairs='', metals=1,
+                      protonate=1,
                       ph=7.0, pka_method='propka', ligand_hydrogens=1,
                       optimize_hbonds=1, minimize=1,
                       forcefield='amber14', solvent='gbn2', restrain='heavy',
@@ -1704,6 +2007,10 @@ ARGUMENTS
     disulfides = 0/1: keep the disulfide bonds OpenMM recognizes (else
     free cysteines) {default: 1}
 
+    disulfide_pairs = str: exactly these disulfide bonds, made even if the
+    cysteines are apart (they move freely), e.g. "A/22-A/96, H/229-K/229"
+    {default: by distance, see disulfides}
+
     metals = 0/1: metal sites: coordinating residues' protonation states
     (e.g. thiolate Cys, His bound by NE2: HID), coordination held during
     the minimization, zero-order bonds in the result {default: 1}
@@ -1762,7 +2069,9 @@ SEE ALSO
         water_min_hbonds=int(water_min_hbonds),
         delete_heterogens=_bool(delete_heterogens),
         mutations=parse_mutations(mutations),
-        disulfides=_bool(disulfides), metals=_bool(metals),
+        disulfides=_bool(disulfides),
+        disulfide_pairs=parse_disulfides(disulfide_pairs),
+        metals=_bool(metals),
         protonate=_bool(protonate), ph=float(ph),
         pka_method=str(pka_method).strip(),
         ligand_hydrogens=_bool(ligand_hydrogens),

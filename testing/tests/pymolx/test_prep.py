@@ -468,6 +468,40 @@ def test_disulfides():
     assert cmd.count_atoms('thiols and resn CYS and name HG') == 6
 
 
+def test_chosen_disulfides():
+    # IL-2: C58-C105 bonded, C125 free (13 A from C58)
+    cmd.load(cmd.exp_path('$PYMOL_DATA/demo/il2.pdb'), 'il2')
+
+    def ss_bonds(obj):
+        return len(cmd.get_model('%s and name SG' % obj).bond)
+
+    std = dict(FAST, minimize=0)
+    assert cmd.prepare_structure('il2', 'auto', **std)['disulfides'] == 1
+    report = cmd.prepare_structure('il2', 'thiols', disulfide_pairs='none',
+                                   **std)
+    assert report['disulfides'] == 0 and ss_bonds('thiols') == 0
+    assert cmd.count_atoms('thiols and resn CYS and name HG') == 3
+    # another pair: the chosen cysteines brought together
+    assert prep.parse_disulfides('/58-/125, /12-/13') == [
+        (('', '58'), ('', '125')), (('', '12'), ('', '13'))]
+    job = prep.prepare_job('il2', 'moved', platform='CPU',
+                           disulfide_pairs=prep.parse_disulfides(
+                               '/58-/125, /12-/13'))
+    job.run()
+    job.apply(cmd)
+    log = '\n'.join(job.log)
+    assert 'broken (not chosen): CYS (blank)/58-CYS (blank)/105' in log
+    assert 'made (SG-SG before minimizing): CYS (blank)/58-CYS (blank)/125 ' \
+        '13.0 A (far apart' in log
+    assert '/12-/13: no such cysteine' in log
+    assert job.report['disulfides'] == 1 and ss_bonds('moved') == 1
+    assert cmd.get_distance('moved and resi 58 and name SG',
+                            'moved and resi 125 and name SG') < 2.3
+    assert cmd.count_atoms('moved and resi 105 and name HG') == 1
+    with pytest.raises(ValueError, match='chain/residue'):
+        prep.parse_disulfides('58-125')
+
+
 def zinc_site(*bound):
     '''
     A peptide with a zinc ion 2.1 A from the given atoms' far side, e.g.

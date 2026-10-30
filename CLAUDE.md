@@ -58,7 +58,9 @@ used in code and commits: [INCENTIVE_PARITY.md](INCENTIVE_PARITY.md).
   clustering of e.g. antibody-antigen models, `pymolx.cluster`),
   `compare_gui` (similarity coloring of close relatives, `pymolx.compare`),
   `seqcompare_gui` (the same by sequence, `pymolx.seqcompare`),
-  `pocket_gui` (residues near a ligand, `pymolx.pocket`).
+  `pocket_gui` (residues near a ligand, `pymolx.pocket`),
+  `antibody_gui` (full IgG from Fab/scFv/VHH arms, hinge, Fc and
+  C-terminal fusions, `pymolx.antibody`).
 - Theme: colors only in `COLORS` (`modules/pymolx/gui/theme.py`), used as
   `$name` in `data/pymolx/styles/dark.qss` (literal `$` must be `$$`).
   Icons: `data/pymolx/icons/*.svg` (own artwork; `<name>-on.svg` = checked).
@@ -147,6 +149,15 @@ used in code and commits: [INCENTIVE_PARITY.md](INCENTIVE_PARITY.md).
   (`pymolwidget.before_draw` hooks), else Qt may show it when another
   widget repaints (red flashes). Inside `with widget:` all the same:
   PyMOL draws nothing without its valid-context flag, even in paintGL.
+- PyMOL orders a chain's atoms by `segi` first: different segments
+  within a chain scramble its residue order (and exports of it). Tag
+  residues with the `custom` atom property instead (selectable:
+  `custom HNGE`, kept in sessions).
+- `alter ..., resv += n` drops insertion codes (28A becomes a second
+  28); renumber with `resi = str(resv + n) + resi.lstrip("-0123456789")`.
+- Objects named like selection keywords (`model`, `chain`, ...) get a
+  `_` appended by PyMOL; the check isn't exposed to Python
+  (`antibody.object_name` probes it with a one-atom object).
 - Kill test processes by PID, never `pkill -f` with a pattern that
   matches your own shell command.
 
