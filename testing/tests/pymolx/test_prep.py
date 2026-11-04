@@ -498,6 +498,21 @@ def test_chosen_disulfides():
     assert cmd.get_distance('moved and resi 58 and name SG',
                             'moved and resi 125 and name SG') < 2.3
     assert cmd.count_atoms('moved and resi 105 and name HG') == 1
+    # 13 A apart: closed by a pull in dynamics, the bond switched on after
+    assert 'disulfide bonds closed by a pull: /58-/125 13.0 -> 2.' in log
+    assert 'still apart' not in log
+    (a, b, before, after), = job.report['disulfides_closed']
+    assert before > 12 and after < 2.3
+    # extra pairs: made besides the automatic ones (here: those off)
+    job = prep.prepare_job('il2', 'extra', platform='CPU', disulfides=False,
+                           extra_disulfides=[(('', '58'), ('', '125'))])
+    job.run()
+    job.apply(cmd)
+    log = '\n'.join(job.log)
+    assert 'broken (not chosen): CYS (blank)/58-CYS (blank)/105' in log
+    assert 'closed by a pull: /58-/125' in log
+    assert cmd.get_distance('extra and resi 58 and name SG',
+                            'extra and resi 125 and name SG') < 2.3
     with pytest.raises(ValueError, match='chain/residue'):
         prep.parse_disulfides('58-125')
 

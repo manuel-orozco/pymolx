@@ -46,7 +46,9 @@ MAX_FORCE_FACTOR = 50   # ... larger than this times the tolerance
 L_IMPROPER = 2.138      # rad, dihedral N-C-CA-CB of L-amino acids (122.5)
 L_IMPROPER_HA = -2.062  # rad, dihedral N-C-CA-HA (-118.1)
 COVERED_H = 1.0        # A: polymer H this close to a het heavy atom
-DYNAMICS_STEP = 2.0    # fs: the dynamics stage's time step
+DYNAMICS_STEP = 1.0    # fs: the dynamics stage's time step (bonds to
+                       # hydrogens aren't constrained: 2 fs blew up at times)
+DYNAMICS_RETRIES = 3   # restarts from the last good picosecond, at most
 PULL_K = 500.0         # kJ/mol/nm^2 of its pulling restraints (the
                        # network spreads it, so it can be firm)
 ENM_K = 2000.0         # kJ/mol/nm^2 holding a moving domain's shape
@@ -54,6 +56,15 @@ ENM_CUTOFF = 8.0       # A between the atoms it bonds
 GUARD_TOLERANCE = 0.5  # rad: chirality guard's free range around L
 DISULFIDE_FREE = 2.5   # A: chosen disulfides farther apart move freely
 DISULFIDE_FAR = 8.0    # A: ... and this far apart, noted
+DISULFIDE_CLOSE = 3.0  # A: ... and farther apart than this, closed by a
+                       # pull in dynamics before their bond is switched on
+DISULFIDE_FLANK = 4    # residues each side of such a cysteine that move
+DISULFIDE_PULL_PS = 20  # ps per round of that pull
+DISULFIDE_STIFFNESS = (1000.0, 20000.0)  # kJ/mol/nm^2 of the S-S bond in
+                       # each round (the force field's: ~140000): the soft
+                       # one draws the pair together, the stiff one (S-S
+                       # within ~0.1 A of its length at 300 K, against
+                       # ~0.5 A) settles it before the full bond
 
 # protonation variants (OpenMM Modeller names): (protonated, deprotonated)
 TITRATABLE = {'ASP': ('ASH', 'ASP'), 'GLU': ('GLH', 'GLU'),
@@ -279,6 +290,10 @@ class PrepJob:
         self.free_residues = set()  # (chain, resi): moved like built ones
                                     # (not restrained, e.g. a stitched
                                     # hinge, pymolx.antibody)
+        self.extra_disulfides = []  # [((chain, resi), (chain, resi))]
+                                    # made besides the automatic ones
+        self.far_disulfides = []    # chosen ones apart, closed by a pull:
+                                    # [(SG key, SG key, A)]
 
         self.input_text = ''
         self.chain_map = {}
@@ -427,6 +442,16 @@ class PrepJob:
         bonds = [b for b in self.topology.bonds()
                  if b.atom1.name == 'SG' and b.atom2.name == 'SG' and
                  b.atom1.residue.name == b.atom2.residue.name == 'CYS']
+        if self.disulfide_pairs is None and self.extra_disulfides:
+            # the automatic ones (kept unless disulfides are off) and these
+            chain = self.chain_map.get
+            self.disulfide_pairs = [
+                ((chain(b.atom1.residue.chain.id),
+                  mm._residue_id(b.atom1.residue)),
+                 (chain(b.atom2.residue.chain.id),
+                  mm._residue_id(b.atom2.residue)))
+                for b in bonds if self.disulfides] + \
+                list(self.extra_disulfides)
         if self.disulfide_pairs is not None:
             bonds = self._chosen_disulfides(app, bonds, lines)
         if bonds and not self.disulfides and self.disulfide_pairs is None:
@@ -561,6 +586,9 @@ class PrepJob:
                 self._label(atom1.residue), self._label(atom2.residue), d,
                 ' (far apart: may strain the structure)'
                 if d > DISULFIDE_FAR else ''))
+            if d > DISULFIDE_CLOSE:
+                self.far_disulfides.append((self._author_key(atom1),
+                                            self._author_key(atom2), d))
             if d > DISULFIDE_FREE:
                 # both cysteines move (built-like: guided to L, trans)
                 residues = {atom1.residue, atom2.residue}
@@ -1326,6 +1354,13 @@ class PrepJob:
                     unit.elementary_charge)
                     for i in range(n_structure))
 
+        # chosen disulfide bonds between cysteines still apart: off at
+        # first (a stiff bond closing 6 A at once drags the cysteines
+        # through their neighbors and tangles the chains), closed by a
+        # pull in dynamics after the first minimization, then on again
+        closing = self._soften_disulfides(openmm, system, topology,
+                                          n_structure)
+
         restrained = 0
         if self.restrain != 'none':
             periodic = self.solvent == 'explicit'
@@ -1522,6 +1557,14 @@ class PrepJob:
         minimize()
         e1 = energy()
 
+        if closing:
+            context = self._close_disulfides(openmm, unit, system, context,
+                                             platform, topology, n_structure,
+                                             closing)
+            self._step('Minimizing with the disulfide bonds...')
+            minimize()
+            e1 = energy()
+            self._report_closed(unit, context, closing)
         if self.dynamics:
             context = self._dynamics(openmm, unit, system, context, platform,
                                      topology, n_structure)
@@ -1586,8 +1629,92 @@ class PrepJob:
 
     # PyMOL part
 
+    def _soften_disulfides(self, openmm, system, topology, n_structure):
+        '''
+        The bond terms of self.far_disulfides, switched off
+
+        :return: [(force, bond term, (atom, atom, r0, k), key, key, A)]
+        '''
+        if not self.far_disulfides:
+            return []
+        index = {self._author_key(a): a.index
+                 for a in list(topology.atoms())[:n_structure]}
+        wanted = {}
+        for a, b, d in self.far_disulfides:
+            if a in index and b in index:
+                wanted[frozenset((index[a], index[b]))] = (a, b, d)
+        closing = []
+        for force in system.getForces():
+            if not isinstance(force, openmm.HarmonicBondForce):
+                continue
+            for term in range(force.getNumBonds()):
+                i, j, r0, k = force.getBondParameters(term)
+                pair = frozenset((i, j))
+                if pair in wanted:
+                    a, b, d = wanted.pop(pair)
+                    closing.append((force, term, (i, j, r0, k), a, b, d))
+                    force.setBondParameters(term, i, j, r0, 0.0)
+        return closing
+
+    def _close_disulfides(self, openmm, unit, system, context, platform,
+                          topology, n_structure, closing):
+        '''
+        Dynamics with the S-S bonds of closing switched on softly and
+        stiffened round by round (a bond pulls when the sulfur atoms are
+        apart and pushes when they are too close; a one-sided pull let
+        them press on, 1.6 A, where the C-S-S angle terms break down), the
+        cysteines and DISULFIDE_FLANK residues each side (and the free
+        residues) moving, the rest held; then the bonds at full strength
+
+        :return: the context to carry on with
+        '''
+        mobile = {(str(c), str(r)) for c, r in self.free_residues}
+        for chain in topology.chains():
+            residues = list(chain.residues())
+            keys = [(self.chain_map.get(chain.id, chain.id),
+                     mm._residue_id(r)) for r in residues]
+            for _, _, _, a, b, _ in closing:
+                for sg in (a, b):
+                    if (sg[0], sg[1]) in keys:
+                        at = keys.index((sg[0], sg[1]))
+                        mobile.update(keys[max(0, at - DISULFIDE_FLANK):
+                                           at + DISULFIDE_FLANK + 1])
+        settings = {'mobile': mobile, 'pull_ps': DISULFIDE_PULL_PS,
+                    'settle_ps': 0, 'temperature': 300.0,
+                    'label': 'Closing disulfide bonds', 'pull': []}
+        for k in DISULFIDE_STIFFNESS:
+            for force, term, (i, j, r0, _), _, _, _ in closing:
+                force.setBondParameters(term, i, j, r0, k)
+            context = self._dynamics(openmm, unit, system, context, platform,
+                                     topology, n_structure, settings)
+        for force, term, parameters, _, _, _ in closing:
+            force.setBondParameters(term, *parameters)
+            force.updateParametersInContext(context)
+        return context
+
+    def _sg_spans(self, unit, context, closing):
+        import numpy as np
+        xyz = context.getState(getPositions=True).getPositions(
+            asNumpy=True).value_in_unit(unit.angstrom)
+        return [float(np.linalg.norm(xyz[p[0]] - xyz[p[1]]))
+                for _, _, p, _, _, _ in closing]
+
+    def _report_closed(self, unit, context, closing):
+        spans = self._sg_spans(unit, context, closing)
+        self._say('  disulfide bonds closed by a pull: %s' % ', '.join(
+            '%s/%s-%s/%s %.1f -> %.2f A' % (a[0], a[1], b[0], b[1], d, now)
+            for (_, _, _, a, b, d), now in zip(closing, spans)))
+        apart = ['%s/%s-%s/%s %.1f A' % (a[0], a[1], b[0], b[1], now)
+                 for (_, _, _, a, b, _), now in zip(closing, spans)
+                 if now > DISULFIDE_CLOSE]
+        if apart:
+            self._say('  Warning: disulfide bonds still apart (strained): '
+                      '%s' % ', '.join(apart))
+        self.report['disulfides_closed'] = [
+            (a, b, d, now) for (_, _, _, a, b, d), now in zip(closing, spans)]
+
     def _dynamics(self, openmm, unit, system, context, platform, topology,
-                  n_structure):
+                  n_structure, settings=None):
         '''
         Short Langevin dynamics of the mobile residues, the rest held
         where it is, with the "pull" pairs drawn together first and then
@@ -1602,7 +1729,8 @@ class PrepJob:
 
         :return: the context to carry on with (a new one)
         '''
-        settings = self.dynamics
+        own = settings is None
+        settings = self.dynamics if own else settings
         mobile = {(str(c), str(r)) for c, r in settings['mobile']}
         atoms = list(topology.atoms())
         index = {self._author_key(a): a.index for a in atoms}
@@ -1669,6 +1797,9 @@ class PrepJob:
             settings.get('temperature', 300.0) * unit.kelvin)
         before = self._pull_spans(unit, context, pull)
         steps = int(1000 / DYNAMICS_STEP)       # per picosecond
+        temperature = settings.get('temperature', 300.0) * unit.kelvin
+        good = positions                        # the last finite frame
+        retries = 0
         for phase, picoseconds in (('pull', settings.get('pull_ps', 0)),
                                    ('settle', settings.get('settle_ps', 0))):
             if not picoseconds:
@@ -1679,6 +1810,21 @@ class PrepJob:
             for _ in range(int(picoseconds)):
                 integrator.step(steps)
                 self._check()
+                state = context.getState(getEnergy=True, getPositions=True)
+                energy = state.getPotentialEnergy().value_in_unit(
+                    unit.kilojoule_per_mole)
+                if math.isfinite(energy):
+                    good = state.getPositions()
+                    continue
+                # blown up: back to the last good picosecond, new velocities
+                retries += 1
+                context.setPositions(good)
+                context.setVelocitiesToTemperature(temperature)
+                if retries > DYNAMICS_RETRIES:
+                    break
+            if retries:
+                self._say('  dynamics: unstable %d time(s), restarted from '
+                          'the last good picosecond' % retries)
             self._say('  dynamics, after the %s (%d ps): %s' % (
                 phase, picoseconds, ', '.join(
                     '%.0f A' % x for x in
@@ -1699,8 +1845,9 @@ class PrepJob:
             system.removeForce(system.getNumForces() - 1)
         del context
         context, _ = self._context(openmm, system, moved)
-        self.report['dynamics_ps'] = settings.get('pull_ps', 0) + \
-            settings.get('settle_ps', 0)
+        if own:
+            self.report['dynamics_ps'] = settings.get('pull_ps', 0) + \
+                settings.get('settle_ps', 0)
         return context
 
     @staticmethod

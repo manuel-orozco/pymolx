@@ -916,7 +916,9 @@ def _part_name(assembly, chain, part):
 class DisulfideDialog(QtWidgets.QDialog):
     '''
     The model's cysteine pairs to choose disulfide bonds from (checked:
-    the current choice, or those close enough to form by themselves)
+    the current choice, or the default: those close enough to form by
+    themselves, and those between the chains of an IgG, heavy-light and
+    the hinge's)
     '''
 
     def __init__(self, assembly, chosen=None, parent=None):
@@ -953,7 +955,8 @@ class DisulfideDialog(QtWidgets.QDialog):
             item = QtWidgets.QTableWidgetItem(
                 antibody.pair_label((pair['a'], pair['b'])))
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            on = pair['bonded'] if chosen_set is None else key in chosen_set
+            on = pair['default'] if chosen_set is None else \
+                key in chosen_set
             item.setCheckState(Qt.CheckState.Checked if on else
                                Qt.CheckState.Unchecked)
             self.table.setItem(row, 0, item)

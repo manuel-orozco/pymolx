@@ -101,6 +101,8 @@ FR4_WINDOW = (45, 110)  # framework 4 motif: residues after framework 2
 FC_MOTIFS = (r'C[VIL]V[VIL]D[VI]S', r'LTC[LM][VI]')
 MIN_PAIRS = 20        # matched C-alpha atoms needed to place a Fab or Fc
 HINGE_WINDOW = 15     # template residues beyond the junction searched
+HINGE_OVERLAP = 3     # residues: the fewest a hinge's end must share with
+                      # the Fab's or the Fc's to be taken for theirs
 FREE_FLANK = 2        # residues next to a junction moved in refinement
 CA_STEP = 3.8         # A between consecutive C-alpha atoms
 STRETCHED = 3.3       # A per residue: a span this long is nearly stretched
@@ -883,20 +885,45 @@ def _hinge_residues(k, fab, fc, template, p1, p2, hinge, assembly, label):
     mapping = _map(template, residues, start, end)
     for i, r in enumerate(residues):
         r.template = mapping.get(i)
-    # residues overlapping the Fab or the Fc are theirs
-    first, last = 0, len(residues)
-    for i, r in enumerate(residues):
-        if r.template is not None and r.template <= p1:
-            first = i + 1
-    for i in range(len(residues) - 1, -1, -1):
-        r = residues[i]
-        if r.template is not None and r.template >= p2:
-            last = i
-    if first >= last and any(r.template is not None for r in residues):
-        assembly.say('%s: the hinge given overlaps the Fab and the Fc '
-                     'entirely; none of it added' % label)
+    # the ends that repeat the Fab's last residues or the Fc's first ones
+    # are theirs. Decided by sequence: the hinge and the parts are mapped
+    # on the template separately, and a hinge unlike the template's (human
+    # IgG1 on mouse IgG2a) can land on positions the Fab or the Fc fill
+    # without repeating any of their residues.
+    text = _sequence(residues)
+    fab_end = _sequence(fab)[-HINGE_WINDOW:]
+    fc_start = _sequence(fc)[:HINGE_WINDOW]
+    for part, there in (('Fab heavy chain\'s end', fab_end),
+                        ('Fc chain\'s start', fc_start)):
+        if len(text) >= HINGE_OVERLAP and text in there:
+            assembly.say('%s: the hinge given (%s) is in the %s already; '
+                         'none of it added' % (label, text, part))
+            return []
+    n = len(residues)
+    first = _overlap(fab_end, text, same_place=lambda k: all(
+        residues[i].template is not None and
+        residues[i].template == fab[i - k].template for i in range(k)))
+    last = n - _overlap(text, fc_start, same_place=lambda k: all(
+        residues[n - k + i].template is not None and
+        residues[n - k + i].template == fc[i].template for i in range(k)))
+    if first >= last:
+        assembly.say('%s: the hinge given is in the Fab and the Fc '
+                     'already; none of it added' % label)
         return []
+    if first:
+        assembly.say('%s hinge: its first %d residues (%s) end the Fab '
+                     'heavy chain already' % (label, first, text[:first]))
+    if last < len(residues):
+        assembly.say('%s hinge: its last %d residues (%s) begin the Fc '
+                     'chain already' % (label, len(residues) - last,
+                                        text[last:]))
     kept = residues[first:last]
+    if kind == 'sequence':
+        # template positions (for coordinates) only between the Fab's end
+        # and the Fc's start; the rest are built
+        between = _map(template, kept, p1 + 1, p2) if p2 > p1 + 1 else {}
+        for i, r in enumerate(kept):
+            r.template = between.get(i)
     if kind == 'structure' and any(r.atoms for r in kept):
         # superposed on the template's hinge and the joined ends
         fab_at = {r.template: r for r in fab if r.template is not None}
@@ -924,7 +951,24 @@ def _hinge_residues(k, fab, fc, template, p1, p2, hinge, assembly, label):
                           'with the template\'s coordinates' % label)
             for r in kept:
                 r.atoms = {}
+    # template positions the Fab or the Fc fill aren't the hinge's to use
+    for r in kept:
+        if r.template is not None and not p1 < r.template < p2:
+            r.template = None
     return kept
+
+
+def _overlap(tail, head, minimum=HINGE_OVERLAP, same_place=None):
+    '''
+    How many residues end "tail" and begin "head" alike: at least minimum
+    (a residue or two in common is chance), or fewer when
+    same_place(k) says they sit on the same template positions
+    '''
+    for k in range(min(len(tail), len(head)), 0, -1):
+        if tail[-k:] == head[:k] and (
+                k >= minimum or (same_place is not None and same_place(k))):
+            return k
+    return 0
 
 
 def _reaches(a, b, steps):
@@ -1736,7 +1780,10 @@ def cysteine_pairs(assembly, cutoff=DISULFIDE_SEARCH):
     unknown when one is still to be built)
 
     :return: [{'a': (chain, resi), 'b': (chain, resi), 'distance': SG-SG
-        A or None, 'parts': (part, part), 'bonded': forms by distance}],
+        A or None, 'parts': (part, part), 'bonded': forms by distance,
+        'hinge': a hinge pair, 'default': made unless chosen otherwise
+        (bonded; heavy-light pairs, then hinge pairs, of cysteines without
+        another partner)}],
         nearest first
     '''
     cys = []
@@ -1759,8 +1806,28 @@ def cysteine_pairs(assembly, cutoff=DISULFIDE_SEARCH):
             if not hinge and (d is None or d > cutoff):
                 continue
             found.append({'a': a, 'b': b, 'distance': d,
-                          'parts': (part_a, part_b),
+                          'parts': (part_a, part_b), 'hinge': hinge,
                           'bonded': d is not None and d <= DISULFIDE_BOND})
+    # made by default, as in an IgG: those formed already, then a heavy
+    # chain's cysteine with a light chain's near it (the upper hinge's,
+    # e.g. IgG1 C220 with the light chain's last), then the hinge's
+    # between the heavy chains; each cysteine with one partner
+    heavy, light = set(assembly.heavy), set(assembly.light)
+
+    def kind(x):
+        chains = {x['a'][0], x['b'][0]}
+        return 'hinge' if x['hinge'] else \
+            'heavy-light' if chains & heavy and chains & light else ''
+
+    taken = {c for x in found if x['bonded'] for c in (x['a'], x['b'])}
+    for x in found:
+        x['default'] = x['bonded']
+    for wanted in ('heavy-light', 'hinge'):
+        for x in found:
+            if not x['default'] and kind(x) == wanted and \
+                    x['a'] not in taken and x['b'] not in taken:
+                x['default'] = True
+                taken |= {x['a'], x['b']}
     # (between chains first: those are the ones to choose)
     found.sort(key=lambda x: (x['a'][0] == x['b'][0], x['distance'] is None,
                               x['distance'] or 0.0))
@@ -1947,6 +2014,16 @@ def refine_job(assembly, source, name, _self=cmd, **options):
     settings['free_residues'] = set(assembly.free)
     if assembly.disulfides is not None:
         settings['disulfide_pairs'] = list(assembly.disulfides)
+    else:
+        # by distance, and those between the chains as in an IgG (heavy-
+        # light, the hinge's), closed in the refinement
+        extra = [(x['a'], x['b']) for x in cysteine_pairs(assembly)
+                 if x['default'] and not x['bonded']]
+        if extra:
+            settings['extra_disulfides'] = extra
+            assembly.say('Disulfide bonds between the chains, closed in '
+                         'the refinement: %s' % ', '.join(
+                             pair_label(p) for p in extra))
     if assembly.collapse:
         # the fused units move with their linkers, drawn in from their
         # extended start by the dynamics and then left to settle
@@ -2132,7 +2209,8 @@ ARGUMENTS
     disulfides = str: exactly these disulfide bonds, in the model's
     numbering, e.g. "H/223-L/214, H/229-K/229" (chosen cysteines apart
     are brought together by the refinement), or "none" {default: those
-    close enough}
+    close enough, and those between the chains of an IgG: heavy-light,
+    and the hinge's between the two heavy chains}
 
 EXAMPLE
 

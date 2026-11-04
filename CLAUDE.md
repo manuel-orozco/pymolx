@@ -60,7 +60,9 @@ used in code and commits: [INCENTIVE_PARITY.md](INCENTIVE_PARITY.md).
   `seqcompare_gui` (the same by sequence, `pymolx.seqcompare`),
   `pocket_gui` (residues near a ligand, `pymolx.pocket`),
   `antibody_gui` (full IgG from Fab/scFv/VHH arms, hinge, Fc and
-  C-terminal fusions, `pymolx.antibody`).
+  C-terminal fusions, `pymolx.antibody`),
+  `prediction_gui` (FASTA plus modifications, glycans and ligands as an
+  AlphaFold 3 / RoseTTAFold3 / ESMFold2 input file, `pymolx.prediction`).
 - Theme: colors only in `COLORS` (`modules/pymolx/gui/theme.py`), used as
   `$name` in `data/pymolx/styles/dark.qss` (literal `$` must be `$$`).
   Icons: `data/pymolx/icons/*.svg` (own artwork; `<name>-on.svg` = checked).
@@ -158,6 +160,18 @@ used in code and commits: [INCENTIVE_PARITY.md](INCENTIVE_PARITY.md).
 - Objects named like selection keywords (`model`, `chain`, ...) get a
   `_` appended by PyMOL; the check isn't exposed to Python
   (`antibody.object_name` probes it with a one-atom object).
+- Qt reads an `<a href="A:12">` as a URL whose *scheme* is "A", and
+  lower-cases it: anchors carrying data need a fragment (`href="#A:12"`,
+  read back with `url.fragment()`).
+- A dialog a test only closes with `deleteLater()` is still alive when
+  PyMOL quits (nothing runs the queued deletion in `pymol -cq`), and the
+  C layer's teardown then segfaults, after every test has passed. Destroy
+  test dialogs at once: `shiboken6.delete(dialog)`. The segfault shows up
+  only in the full suite (`PYTHONFAULTHANDLER=1` points at `internal._quit`),
+  not in the plugin's own test file, and never in the real GUI.
+- A `QMenu.exec` in a slot blocks: a test that emits the signal hangs.
+  Build the menu in a method the test can call, and disconnect the
+  dialog's own slot before emitting.
 - Kill test processes by PID, never `pkill -f` with a pattern that
   matches your own shell command.
 

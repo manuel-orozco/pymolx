@@ -544,6 +544,44 @@ def test_hinge_sequence(pdb):
                           hinge_sequence='EPKSX')
 
 
+def test_hinge_from_another_igg(pdb):
+    # a hinge unlike the template's lands, aligned to the template, where
+    # the Fab or the Fc sits; it is kept whole all the same (Ipilimumab's
+    # human IgG1 hinge on mouse IgG2a lost HTCPP that way, the chain
+    # closed over the hole)
+    split_template(pdb)
+    fab = sequence('fab and chain H')
+    fc = sequence('fc and chain H')
+    for hinge in ('EPRGPTIK', 'ESKYGPP', 'ERKCCVE'):      # mouse 2a, h4, h2
+        a = antibody.assemble('fab', 'fc', 'fab2', '1hzh',
+                              hinge_sequence=hinge)
+        for chain in ('H', 'K'):
+            kept = antibody._sequence([r for r in a.chains[chain]
+                                       if r.part == 'hinge'])
+            assert kept == hinge
+        assert antibody._sequence(a.chains['H']) == fab + hinge + fc
+    # what the Fab or the Fc has already is left out, and said so
+    a = antibody.assemble('fab', 'fc', 'fab2', '1hzh',
+                          hinge_sequence=fab[-5:] + 'EPKSCDK')
+    assert any('first 5 residues (%s) end the Fab' % fab[-5:] in line
+               for line in a.log)
+    assert antibody._sequence(a.chains['H']) == fab + 'EPKSCDK' + fc
+    a = antibody.assemble('fab', 'fc', 'fab2', '1hzh',
+                          hinge_sequence='EPKSCDK' + fc[:6])
+    assert any('last 6 residues (%s) begin the Fc' % fc[:6] in line
+               for line in a.log)
+    assert antibody._sequence(a.chains['H']) == fab + 'EPKSCDK' + fc
+    # a hinge the Fc begins with already (with a residue before it)
+    a = antibody.assemble('fab', 'fc', 'fab2', '1hzh',
+                          hinge_sequence=fc[1:13])
+    assert any("is in the Fc chain's start already" in line
+               for line in a.log)
+    assert antibody._sequence(a.chains['H']) == fab + fc
+    # two residues in common are chance, not overlap
+    assert antibody._overlap('VDKKA', 'KAEPK') == 0
+    assert antibody._overlap('VDKKA', 'KKAEP') == 3
+
+
 def test_hinge_structure(pdb):
     split_template(pdb)
     cmd.create('hinge', '1hzh and chain H+K and resi 222-245 and polymer')
@@ -609,6 +647,16 @@ def test_cysteine_pairs(pdb):
     # hinge cysteines of different places aren't
     assert pairs['H/232-K/232']['distance'] > 15
     assert 'H/223-K/229' not in pairs and 'H/229-K/232' not in pairs
+    # made by default, as in an IgG1: the heavy-light ones, the second
+    # hinge one; not the upper hinge cysteines together (theirs are the
+    # light chains')
+    defaults = {label for label, p in pairs.items() if p['default']}
+    assert {'H/223-L/214', 'K/223-M/214', 'H/229-K/229',
+            'H/232-K/232'} <= defaults
+    assert 'H/223-K/223' in pairs and 'H/223-K/223' not in defaults
+    assert len(defaults) == 16
+    used = [c for label in defaults for c in label.split('-')]
+    assert len(used) == len(set(used))         # one partner each
     # without refinement: just the bonds
     name = antibody.load(a, 'plain')
     chosen = [(('H', '223'), ('L', '214')), (('H', '229'), ('K', '229'))]
@@ -650,6 +698,31 @@ def test_refinement(pdb):
             'igg_model and chain %s and resi %s and name SG' % (c2, r2)) \
             < 2.3
     assert len(cmd.get_model('igg_model and name SG').bond) == 15
+
+
+def test_default_disulfides(pdb):
+    # no choice made: those close enough, and those between the chains of
+    # an IgG1 (heavy-light, the second hinge one 18.6 A apart), closed in
+    # the refinement by a pull
+    pytest.importorskip('openmm')
+    pytest.importorskip('pdbfixer')
+    for code in ('1hzh', '1n8z', '3ave'):
+        cmd.load(pdb[code], code)
+    a = cmd.build_antibody('1n8z', '3ave', template='1hzh', name='igg_ss',
+                           quiet=1)
+    log = '\n'.join(a.log)
+    assert 'closed in the refinement: ' in log
+    assert 'disulfide bonds closed by a pull: ' in log
+    assert 'still apart' not in log and not a.warnings
+    assert not antibody.long_peptide_bonds('igg_ss')
+    for c1, r1, c2, r2 in (('H', '223', 'L', '214'),
+                           ('K', '223', 'M', '214'),
+                           ('H', '229', 'K', '229'),
+                           ('H', '232', 'K', '232')):
+        assert cmd.get_distance(
+            'igg_ss and chain %s and resi %s and name SG' % (c1, r1),
+            'igg_ss and chain %s and resi %s and name SG' % (c2, r2)) < 2.3
+    assert len(cmd.get_model('igg_ss and name SG').bond) == 16
 
 
 def test_dialog(pdb):

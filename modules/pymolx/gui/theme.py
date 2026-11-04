@@ -39,6 +39,11 @@ COLORS = {
     'plot_3': '#ffb74d', 'plot_4': '#81c784', 'plot_5': '#f06292',
     'plot_6': '#ba68c8', 'plot_7': '#4db6ac', 'plot_8': '#fff176',
     'plot_9': '#a1887f',
+    # Structure Prediction: residues marked in the sequence
+    'prediction_ptm': '#e0883a',
+    'prediction_glycan': '#35a98a',
+    'prediction_disulfide': '#d6b23a',
+    'prediction_sequon': '#4a90d9',
     # Antibody Builder schematic: parts not given yet, outlines
     'antibody_part': '#a3a3a3',
     'antibody_edge': '#1c2630',
