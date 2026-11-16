@@ -1705,7 +1705,9 @@ def main_menu(self_cmd,pos, screenpos):
         [ 0, ''             , ''                      ],
         [ 1, del_col + 'delete all', 'cmd.delete("all")' ],
         [ 1, del_col + 'reinitialize', 'cmd.reinitialize()' ],
-        [ 1, del_col + 'quit', 'cmd.quit()' ],
+        # pymolx: in the GUI, offer to save the session first
+        [ 1, del_col + 'quit',
+          '__import__("pymolx.unsaved").unsaved.quit_asking(cmd)' ],
         ]
 
 

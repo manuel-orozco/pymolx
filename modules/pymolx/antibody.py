@@ -40,6 +40,7 @@ which would put the hinge after the Fc.)
 '''
 
 import os
+import string
 import re
 
 import numpy as np
@@ -59,7 +60,32 @@ PART_LABELS = {'fab1': 'Fab1', 'fab2': 'Fab2', 'hinge': 'Hinge',
 PART_TAGS = {'fab1': 'FAB1', 'fab2': 'FAB2', 'hinge': 'HNGE', 'fc': 'FC'}
 # heavy chain colors; light chains a lighter shade (LIGHT_TINT)
 PART_COLORS = {'fab1': '#e0883a', 'fab2': '#4a90d9', 'hinge': '#b267cf',
-               'fc': '#35a98a', 'fusion': '#d6b23a'}
+               'fc': '#35a98a', 'fusion': '#d6b23a',
+               'antigen': '#9aa0a6'}
+# chains carried in with a part (an antigen, a receptor): they keep their
+# own numbering and move with the part they are bound to
+ANTIGEN_PARTS = ('fab1', 'fab2', 'fc')
+ANTIGEN_TAGS = {'fab1': 'AGN1', 'fab2': 'AGN2', 'fc': 'AGNF'}
+ANTIGEN_LABELS = {'fab1': 'antigen on Fab1', 'fab2': 'antigen on Fab2',
+                  'fc': 'receptor on the Fc'}
+
+
+def antigen_tag(part):
+    '''
+    The "custom" tag of the chains carried in with a part: AGN1, AGNF,
+    or for a fused unit AGNH1 (like its own FUSH1)
+    '''
+    if part.startswith('fusion_'):
+        site = part[len('fusion_'):]
+        return 'AGN' + site[0].upper() + site[-1]
+    return ANTIGEN_TAGS.get(part, 'AGN')
+
+
+def antigen_label(part):
+    if part.startswith('fusion_'):
+        return 'antigen on the unit on %s' % FUSION_SITES.get(
+            part[len('fusion_'):], part)
+    return ANTIGEN_LABELS.get(part, part)
 LIGHT_TINT = 0.45
 # C-terminal fusions (scFv, VHH appended through a linker): where
 FUSION_SITES = {'heavy1': 'heavy chain 1', 'heavy2': 'heavy chain 2',
@@ -117,7 +143,9 @@ SINGLE_OVERLAPS = 10    # has at most this many atom pairs this close
 DISULFIDE_SEARCH = 8.0  # A: SG-SG of cysteine pairs offered as disulfides
 DISULFIDE_BOND = 2.5    # A: SG-SG of disulfides made by distance
 GLYCAN_CONTACT = 2.0  # A: het groups bonded to a chain go with it
-FUSION_GAP = 6.0      # A: a fused unit's N-terminus from the chain's end
+FUSION_GAP = 6.0      # A: the least a fused unit's N-terminus sits
+                      # from the chain's end (a longer linker reaches
+                      # further: COIL_STEP of its length)
 EXTENDED_STEP = 3.2   # A per residue of an extended linker
 LINKER_SHAPES = ('relaxed', 'extended', 'collapsed')
 COIL_STEP = 3.8       # A: a random coil's end-to-end is this times sqrt(N)
@@ -125,6 +153,17 @@ PULL_PS = 40          # ps of dynamics drawing a fused unit in ...
 PULL_SPREAD = 1       # residues of it the pull acts on (the network
                       # passes the force on to the rest)
 SETTLE_PS = 20       # ... and of letting it settle afterwards
+UNITS_CONTACT = 3.0  # A: closer heavy atoms of two fused units are a
+                     # contact worth reporting after the refinement
+LINKER_APART = 4.0   # A: a linker's heavy atoms kept this far from the
+                     # domains (it is built without coordinates, so it
+                     # comes out draped over whatever it lies against)
+LINKER_JUNCTION = 3  # residues each side of the linker-unit bond left
+                     # out of that (they have to reach it)
+UNITS_APART = 5.0    # A: heavy atoms of two fused units kept this far
+                     # from each other while they are drawn in (they are
+                     # pulled toward anchors side by side on the Fc, so
+                     # they meet in the middle)
 FUSION_CLEARANCE = 6.5  # A: C-alpha atoms closer to others count as overlap
 FUSION_POSES = 40     # best poses by C-alpha atoms checked with all atoms
 CDR_OUTWARD = 60      # degrees: CDRs count as facing the solvent
@@ -133,6 +172,7 @@ CDR_OUTWARD = 60      # degrees: CDRs count as facing the solvent
 CDR_CHOICES = ('out', 'any')
 GLYCOSYLATION_CONTACT = 3.0  # A: sugar C1 to Asn ND2 / Ser, Thr O
 CLASH = 2.2           # A: template atoms this close to the parts' clash
+GROUP_START = 1001    # first residue number of a chain's het groups
 
 def _three(letter):
     from .prep import ONE_LETTER
@@ -152,6 +192,8 @@ class Residue:
         self.template = None    # template residue index
         self.threaded = False   # coordinates from the template
         self.light = False      # light chain or VL domain (lighter color)
+        self.resi = ''          # its number in the structure it came from
+                                # (kept by chains carried in whole)
 
     @property
     def letter(self):
@@ -168,6 +210,7 @@ class Residue:
             for name, (elem, xyz, b) in self.atoms.items()}, self.part)
         result.template = self.template
         result.light = self.light
+        result.resi = self.resi
         return result
 
 
@@ -192,7 +235,10 @@ def read_chain(obj, chain, state=-1, _self=cmd):
     order = {}
     _self.iterate(sele, '_ = order.setdefault(resi, resn)',
                   space={'order': order})
-    residues = {resi: Residue(resn) for resi, resn in order.items()}
+    residues = {}
+    for resi, resn in order.items():
+        residues[resi] = Residue(resn)
+        residues[resi].resi = resi
     rows = []
     _self.iterate_state(_object_state(obj, state, _self),
                         sele + ' and not hydro',
@@ -536,15 +582,47 @@ class Assembly:
                                 # or None: by distance
         self.formats = {'fab1': 'fab', 'fab2': 'fab'}
         self.labels = dict(PART_LABELS, linker='linker')
+        self.rigid_antigens = False  # carried chains held where they are
+                                     # in the refinement, not minimized
+        self.carried = {}       # chain: (part, source object, its chain)
+                                # for chains carried in with a part
+                                # (antigens, receptors), keeping their
+                                # own numbering
+        self.transforms = {}    # part: (rotation, shift) placing it
         self.fusion_sites = []  # sites with a fusion (FUSION_SITES)
         self.collapse = []      # fusions whose linker the dynamics
                                 # collapses (refine_job)
+
+    def numbers(self, chain):
+        '''
+        The residue numbers of a chain as the model has them: 1..N for
+        the stitched chains, their own for the ones carried in
+        '''
+        residues = self.chains[chain]
+        if chain in self.carried:
+            return [r.resi for r in residues]
+        return [str(k) for k in range(1, len(residues) + 1)]
+
+    def group_numbers(self, chain):
+        '''
+        The residue numbers of a chain's het groups: from GROUP_START, or
+        past the chain's own residues when they reach that far (a chain
+        carried in keeps its numbering, which can run past 1000)
+        '''
+        start = GROUP_START
+        if chain in self.chains:
+            numbers = [_resi_parts(n)[0] for n in self.numbers(chain)]
+            if numbers:
+                start = max(start, max(numbers) + 1)
+        return list(range(start, start + len(self.groups.get(chain, ()))))
 
     def tags(self):
         '''
         {part: "custom" tag}: FAB1, SCFV2, VHH1, ...; HNGE, FC
         '''
         tags = dict(PART_TAGS)
+        for part, _, _ in self.carried.values():
+            tags[part] = antigen_tag(part[len('antigen_'):])
         for k, part in enumerate(('fab1', 'fab2')):
             fmt = self.formats[part]
             if fmt != 'none':
@@ -556,8 +634,10 @@ class Assembly:
         return tags
 
     def light_residues(self):
-        return {(chain, str(k)) for chain, residues in self.chains.items()
-                for k, r in enumerate(residues, 1) if r.light}
+        return {(chain, number)
+                for chain, residues in self.chains.items()
+                for number, r in zip(self.numbers(chain), residues)
+                if r.light}
 
     def say(self, text):
         self.log.append(text)
@@ -572,10 +652,10 @@ class Assembly:
         '''
         result = {}
         for chain, residues in self.chains.items():
-            for k, r in enumerate(residues, 1):
-                result[(chain, str(k))] = r.part
+            for number, r in zip(self.numbers(chain), residues):
+                result[(chain, number)] = r.part
         for chain, groups in self.groups.items():
-            for k, r in enumerate(groups, 1001):
+            for k, r in zip(self.group_numbers(chain), groups):
                 result[(chain, str(k))] = r.part
         return result
 
@@ -653,6 +733,7 @@ def _place_fab(label, part, obj, heavy, light, template, t_heavy, t_light,
                 assembly.say('%s: fitted on the whole Fab (on its constant '
                              'domains, its elbow angle would put it into '
                              'the other parts)' % label)
+    assembly.transforms[part] = (rotation, shift)
     assembly.fits.append((label, rmsd, kept))
     assembly.say('%s (%s, chains %s/%s): fitted on %d of %d %s C-alpha '
                  'atoms, RMSD %.2f A' % (label, obj, heavy, light, kept,
@@ -677,6 +758,82 @@ def _place_fab(label, part, obj, heavy, light, template, t_heavy, t_light,
                 found.append(g)
         groups.append(found)
     return result[0], result[1], groups[0], groups[1]
+
+
+def parse_antigen_chains(text):
+    '''
+    Chains to carry in with a part: "C", "C+D", "C, D" -> ["C", "D"]
+    '''
+    text = str(text or '').strip()
+    if not text:
+        return []
+    return [p for p in re.split(r'[,;+\s]+', text) if p]
+
+
+def _free_chain_id(wanted, taken):
+    '''
+    The chain ID a carried chain gets: its own if free, else the next
+    letter or digit that is
+    '''
+    letters = string.ascii_uppercase + string.digits + \
+        string.ascii_lowercase
+    if wanted and wanted not in taken:
+        return wanted
+    # (a second copy of the same chain: the next letter after it, so the
+    # two read as a pair, C and D)
+    start = letters.find(wanted) + 1 if wanted in letters else 0
+    for k in range(len(letters)):
+        letter = letters[(start + k) % len(letters)]
+        if letter not in taken:
+            return letter
+    raise ValueError('no chain ID left for the chains carried in')
+
+
+def carry_chains(assembly, part, obj, chains, state, glycans, _self=cmd):
+    '''
+    Chains of a part's structure which are not the antibody itself (an
+    antigen, a receptor), moved with the part onto the template and added
+    to the model as chains of their own, keeping their numbering.
+
+    :param part: the part they came with (its transform places them)
+    '''
+    chains = parse_antigen_chains(chains)
+    if not chains:
+        return
+    if part not in assembly.transforms:
+        raise ValueError('%s: it is not in the model, so the chains '
+                         'bound to it (%s) can\'t be placed'
+                         % (antigen_label(part), ', '.join(chains)))
+    rotation, shift = assembly.transforms[part]
+    for chain in chains:
+        residues = read_chain(obj, chain, state, _self)
+        if not residues:
+            raise ValueError('no protein chain "%s" in "%s" (the chains '
+                             'bound to %s)' % (chain, obj,
+                                               antigen_label(part)))
+        name = _free_chain_id(chain, set(assembly.chains))
+        moved = []
+        for r in residues:
+            r = r.moved(rotation, shift)
+            r.part = 'antigen_' + part
+            r.template = None
+            moved.append(r)
+        assembly.chains[name] = moved
+        assembly.carried[name] = ('antigen_' + part, obj, chain)
+        assembly.labels['antigen_' + part] = antigen_label(part)
+        if glycans:
+            groups = [g.moved(rotation, shift)
+                      for g in attached_groups(obj, chain, state, _self)]
+            for g in groups:
+                g.part = 'antigen_' + part
+            if groups:
+                assembly.groups[name] = groups
+        assembly.say('%s: chain %s of %s carried in as chain %s (%d '
+                     'residues%s), its own numbering kept' % (
+                         antigen_label(part), chain, obj, name,
+                         len(moved),
+                         ', %d groups' % len(assembly.groups[name])
+                         if name in assembly.groups else ''))
 
 
 def _ca_centroid(residues):
@@ -783,6 +940,7 @@ def _place_single(label, part, fmt, obj, chain, template, t_heavy, t_light,
                 full, '; the other arm of the template, or another '
                 'template, may suit it better' if fraction < 0.5 else '')
         move = move * fraction
+    assembly.transforms[part] = (rotation, shift + move)
     assembly.fits.append((label, rmsd, kept))
     where = 'on the template\'s Fv' if position == 'fv' else \
         'then moved %.0f A toward the hinge%s' % (full * fraction, note)
@@ -837,6 +995,7 @@ def _place_fc(obj, chains, template, t_heavy, state, assembly, glycans,
     if best is None:
         raise ValueError('Fc: too few residues match the template\'s Fc')
     (rotation, shift, rmsd, kept), order, maps, total = best
+    assembly.transforms['fc'] = (rotation, shift)
     assembly.fits.append(('Fc', rmsd, kept))
     assembly.say('Fc (%s, chains %s): fitted on %d of %d C-alpha atoms, '
                  'RMSD %.2f A' % (obj, '/'.join(chains[k] for k in order),
@@ -1220,7 +1379,7 @@ def assemble(fab1, fc, fab2='', template=DEFAULT_TEMPLATE, hinge='',
              fusions='', single_position='fv', arm_linkers=('', ''),
              arm_orientations=('', ''),
              arm_scfv_linkers=(DEFAULT_SCFV_LINKER,) * 2,
-             fusion_linkers='relaxed',
+             fusion_linkers='relaxed', antigens=('', '', ''),
              _self=cmd):
     '''
     Place and stitch the parts (see the module's description); fab1,
@@ -1373,6 +1532,13 @@ def assemble(fab1, fc, fab2='', template=DEFAULT_TEMPLATE, hinge='',
             assembly.groups[out[2 * k + 1]] = l_groups
     sites = {'heavy1': out[0], 'light1': out[1], 'heavy2': out[2],
              'light2': out[3]}
+    # chains bound to the parts (antigens, receptors): carried in with
+    # the part they came with, placed by the same superposition
+    for part, text, source in zip(ANTIGEN_PARTS, antigens,
+                                  (fabs[0][2], fabs[1][2], fc)):
+        if str(text or '').strip():
+            carry_chains(assembly, part, source, text, state, glycans,
+                         _self)
     for fusion in sorted(fusions, key=lambda f: list(FUSION_SITES).index(
             f['site'])):
         chain_id = sites[fusion['site']]
@@ -1388,6 +1554,10 @@ def assemble(fab1, fc, fab2='', template=DEFAULT_TEMPLATE, hinge='',
             owner = [r for c in (out[0], out[2])
                      for r in assembly.chains[c] if r.part == 'fc']
         _place_fusion(assembly, fusion, chain_id, owner, state, _self)
+        if str(fusion.get('antigens') or '').strip():
+            carry_chains(assembly, 'fusion_' + fusion['site'],
+                         fusion['object'], fusion['antigens'], state,
+                         glycans, _self)
     _unthread_clashes(assembly)
     for chain_id, residues in assembly.chains.items():
         _check_gaps(chain_id, residues, assembly)
@@ -1437,14 +1607,16 @@ def parse_orientation(text):
 
 def parse_fusions(text):
     '''
-    "heavy:2ghw/B:(G4S)2 light1:vhh_model heavy1:2ghw/B:(G4S)2:vl-vh"
-    (site:object[/chain][:linker[:orientation[:scfv_linker]]]; sites
+    "heavy:2ghw/B:(G4S)2 light1:vhh_model heavy1:2ghw/B/C:(G4S)2:vl-vh"
+    (site:object[/chain[/bound chains]][:linker[:orientation
+    [:scfv_linker]]]; a bound chain is an antigen or receptor carried in
+    with the unit, as for the arms and the Fc; sites
     heavy1, heavy2, light1, light2, or heavy / light for both; linker
     default (G4S)2; an scFv's orientation vh-vl or vl-vh, default: the
     structure's, its domains then joined by scfv_linker, default (G4S)3)
 
-    :return: [{'site', 'object', 'chain', 'linker', 'orientation',
-        'scfv_linker'}]
+    :return: [{'site', 'object', 'chain', 'antigens', 'linker',
+        'orientation', 'scfv_linker'}]
     '''
     if isinstance(text, (list, tuple)):
         return [dict(f) for f in text]
@@ -1462,7 +1634,8 @@ def parse_fusions(text):
         if not set(sites) <= set(FUSION_SITES):
             raise ValueError('fusion "%s": the site is one of %s, heavy, '
                              'light' % (token, ', '.join(FUSION_SITES)))
-        obj, _, chain = parts[1].partition('/')
+        obj, _, rest = parts[1].partition('/')
+        chain, _, antigens = rest.partition('/')
         linker = parse_linker(parts[2]) if len(parts) >= 3 else \
             DEFAULT_LINKER
         orientation = parse_orientation(parts[3] if len(parts) >= 4 else '')
@@ -1470,7 +1643,8 @@ def parse_fusions(text):
             DEFAULT_SCFV_LINKER
         for one in sites:
             found.append({'site': one, 'object': obj, 'chain': chain,
-                          'linker': linker, 'orientation': orientation,
+                          'antigens': antigens, 'linker': linker,
+                          'orientation': orientation,
                           'scfv_linker': scfv_linker, 'cdrs': 'out'})
     return found
 
@@ -1646,8 +1820,12 @@ def _place_fusion(assembly, fusion, chain_id, owner, state, _self):
     # the length of an extended one (which it then has to stretch to)
     shape = fusion.get('linker_shape', 'relaxed')
     extended = shape in ('extended', 'collapsed')
-    gap = EXTENDED_STEP * (between + 1) if extended else \
-        min(FUSION_GAP, max(2.0, 0.8 * CA_STEP * (between + 1)))
+    # relaxed: as far out as a random coil of that many residues reaches
+    # (a fixed short gap left a long linker nowhere to go but over the
+    # unit it joins), but never further than the linker can stretch
+    gap = EXTENDED_STEP * (between + 1) if extended else min(
+        EXTENDED_STEP * (between + 1),
+        max(FUSION_GAP, COIL_STEP * (between + 1) ** 0.5))
     # (not the chain's last residues: the unit is joined to them)
     joined = {id(r) for r in chain[max(0, last - 3):last + 1]}
     others = np.array([r.ca for residues in assembly.chains.values()
@@ -1660,6 +1838,19 @@ def _place_fusion(assembly, fusion, chain_id, owner, state, _self):
     atom_tree = cKDTree(atoms)
     unit_xyz = np.array([xyz for r in unit for _, xyz, _ in
                          r.atoms.values()])
+    # chains bound to the unit (an antigen) count in the search: a pose
+    # which fits the unit but buries what it binds is no good
+    bound = []
+    for bound_chain in parse_antigen_chains(fusion.get('antigens', '')):
+        bound += read_chain(obj, bound_chain, state, _self)
+    bound_xyz = np.array([xyz for r in bound for _, xyz, _ in
+                          r.atoms.values()]) if bound else None
+    bound_ca = np.array([r.ca for r in bound if r.ca is not None]) \
+        if bound else None
+    scan_ca = ca if bound_ca is None or not len(bound_ca) else \
+        np.vstack([ca, bound_ca])
+    scored_xyz = unit_xyz if bound_xyz is None or not len(bound_xyz) else \
+        np.vstack([unit_xyz, bound_xyz])
     # directions around "outward"
     e1 = np.cross(outward, [1.0, 0, 0] if abs(outward[0]) < 0.9
                   else [0, 1.0, 0])
@@ -1693,14 +1884,14 @@ def _place_fusion(assembly, fusion, chain_id, owner, state, _self):
                 for spin in np.radians(np.arange(0, 360, 30)):
                     rotation = _axis_rotation(direction, spin) @ align
                     shift = anchor + gap * direction - rotation @ n_term
-                    n = _overlaps(ca @ rotation.T + shift, tree,
+                    n = _overlaps(scan_ca @ rotation.T + shift, tree,
                                   FUSION_CLEARANCE)
                     poses.append(((n, cdr_angle(rotation, shift), tilt),
                                   rotation, shift))
     poses.sort(key=lambda pose: pose[0])
     best = None
     for (n, angle, tilt), rotation, shift in poses[:FUSION_POSES]:
-        xyz = unit_xyz @ rotation.T + shift
+        xyz = scored_xyz @ rotation.T + shift
         # real clashes first, then contacts, then where the CDRs face
         clashes = _overlaps(xyz, atom_tree, OVERLAP)
         close = _overlaps(xyz, atom_tree, SINGLE_CLEARANCE)
@@ -1709,6 +1900,7 @@ def _place_fusion(assembly, fusion, chain_id, owner, state, _self):
             best = (score, rotation, shift)
     (_, overlaps, angle, _, tilt), rotation, shift = best
     part = 'fusion_' + site
+    assembly.transforms[part] = (rotation, shift)
     linker = []
     for letter in fusion['linker']:
         r = Residue(_three(letter), part='linker')
@@ -1781,9 +1973,10 @@ def cysteine_pairs(assembly, cutoff=DISULFIDE_SEARCH):
 
     :return: [{'a': (chain, resi), 'b': (chain, resi), 'distance': SG-SG
         A or None, 'parts': (part, part), 'bonded': forms by distance,
-        'hinge': a hinge pair, 'default': made unless chosen otherwise
-        (bonded; heavy-light pairs, then hinge pairs, of cysteines without
-        another partner)}],
+        'hinge': a hinge pair, 'carried': both inside one chain carried
+        in with a part (an antigen's own bonds, kept whatever is chosen),
+        'default': made unless chosen otherwise (bonded; heavy-light
+        pairs, then hinge pairs, of cysteines without another partner)}],
         nearest first
     '''
     cys = []
@@ -1807,7 +2000,11 @@ def cysteine_pairs(assembly, cutoff=DISULFIDE_SEARCH):
                 continue
             found.append({'a': a, 'b': b, 'distance': d,
                           'parts': (part_a, part_b), 'hinge': hinge,
-                          'bonded': d is not None and d <= DISULFIDE_BOND})
+                          'bonded': d is not None and d <= DISULFIDE_BOND,
+                          # inside a chain carried in with a part: the
+                          # structure's own, not the model's to choose
+                          'carried': a[0] == b[0] and
+                          a[0] in assembly.carried})
     # made by default, as in an IgG: those formed already, then a heavy
     # chain's cysteine with a light chain's near it (the upper hinge's,
     # e.g. IgG1 C220 with the light chain's last), then the hinge's
@@ -1863,6 +2060,19 @@ def _atom_name(name, elem):
     return '%-4s' % name[:4]
 
 
+def _resi_parts(number):
+    '''
+    "100A" -> (100, "A"); the PDB columns for a residue number
+    '''
+    text = str(number).strip()
+    digits = text.rstrip(string.ascii_letters)
+    icode = text[len(digits):][:1]
+    try:
+        return int(digits), icode
+    except ValueError:
+        return 0, ''
+
+
 def pdb_text(assembly):
     '''
     PDB text of the residues with coordinates
@@ -1870,22 +2080,23 @@ def pdb_text(assembly):
     lines = []
     serial = 0
 
-    def write(record, chain, resv, r):
+    def write(record, chain, number, r):
         nonlocal serial
+        resv, icode = _resi_parts(number)
         for name, (elem, xyz, b) in r.atoms.items():
             serial += 1
             lines.append(
-                '%-6s%5d %s %3s %1s%4d    %8.3f%8.3f%8.3f%6.2f%6.2f      '
+                '%-6s%5d %s %3s %1s%4d%1s   %8.3f%8.3f%8.3f%6.2f%6.2f      '
                 '    %2s' % (record, serial % 100000, _atom_name(name, elem),
-                             r.resn[:3], chain, resv, xyz[0], xyz[1], xyz[2],
-                             1.0, b, elem.upper()))
+                             r.resn[:3], chain, resv, icode,
+                             xyz[0], xyz[1], xyz[2], 1.0, b, elem.upper()))
 
     for chain, residues in assembly.chains.items():
-        for k, r in enumerate(residues, 1):
-            write('ATOM', chain, k, r)
+        for number, r in zip(assembly.numbers(chain), residues):
+            write('ATOM', chain, number, r)
         lines.append('TER')
     for chain, groups in assembly.groups.items():
-        for k, r in enumerate(groups, 1001):
+        for k, r in zip(assembly.group_numbers(chain), groups):
             write('HETATM', chain, k, r)
     lines.append('END')
     return '\n'.join(lines) + '\n'
@@ -1923,9 +2134,12 @@ def load(assembly, name, _self=cmd):
     # (PyMOL renames objects named like selection keywords, e.g. "model")
     new = [n for n in _self.get_names('objects') if n not in before]
     name = new[0] if len(new) == 1 else name
-    absent = [(chain, str(k), k, r.resn)
+    # (chain, resi, resv, resn): the number as the model has it, which
+    # for a chain carried in is its own, insertion code and all
+    absent = [(chain, number, _resi_parts(number)[0], r.resn)
               for chain, residues in assembly.chains.items()
-              for k, r in enumerate(residues, 1) if not r.atoms]
+              for number, r in zip(assembly.numbers(chain), residues)
+              if not r.atoms]
     if absent:
         missing.add_missing_residues(name, absent, _self=_self)
     set_parts(name, assembly.parts(), _self, assembly.tags())
@@ -1981,6 +2195,7 @@ def color_parts(name, assembly, _self=cmd):
                                                       LIGHT_TINT))
     for part, tag in tags.items():
         key = 'fusion' if part.startswith('fusion') else \
+            'antigen' if part.startswith('antigen') else \
             'hinge' if part == 'linker' else part
         _self.color('ab_' + key, '%%%s and custom %s' % (name, tag))
         _self.color('ab_%s_light' % key, '%%%s and custom %s and (%s)' % (
@@ -2012,8 +2227,32 @@ def refine_job(assembly, source, name, _self=cmd, **options):
                     diagnostics=False)
     settings.update(options)
     settings['free_residues'] = set(assembly.free)
+    if assembly.carried and assembly.rigid_antigens:
+        # held where they are: the chains carried in keep the pose their
+        # part gave them, and only the antibody around them relaxes.
+        # Residues built into their own gaps are left free, with their
+        # neighbors, or the loop can't close between two pinned ends.
+        fixed = set()
+        for chain in assembly.carried:
+            numbers = assembly.numbers(chain)
+            residues = assembly.chains[chain]
+            free = set()
+            for k, r in enumerate(residues):
+                if not r.atoms:
+                    free |= set(range(max(0, k - FREE_FLANK),
+                                      min(len(residues), k + FREE_FLANK + 1)))
+            fixed |= {(chain, number) for k, number in enumerate(numbers)
+                      if k not in free}
+        settings['fixed_residues'] = fixed
     if assembly.disulfides is not None:
-        settings['disulfide_pairs'] = list(assembly.disulfides)
+        # a chain carried in keeps its own disulfide bonds whatever is
+        # chosen for the antibody (they are the structure's, not the
+        # model's to change)
+        chosen = {frozenset(pair) for pair in assembly.disulfides}
+        settings['disulfide_pairs'] = list(assembly.disulfides) + [
+            (x['a'], x['b']) for x in cysteine_pairs(assembly)
+            if x['carried'] and x['bonded'] and
+            frozenset((x['a'], x['b'])) not in chosen]
     else:
         # by distance, and those between the chains as in an IgG (heavy-
         # light, the hinge's), closed in the refinement
@@ -2046,9 +2285,27 @@ def refine_job(assembly, source, name, _self=cmd, **options):
             rigid.append([(chain, str(k), name)
                           for k in range(one['unit'], end + 1)
                           for name in BACKBONE])
+        # each fused unit clear of the others, and each linker clear of
+        # the domains (its own unit's first residues and the linker's
+        # last ones excepted: they are bonded to each other)
+        units, linkers = [], []
+        for one in assembly.collapse:
+            chain = one['chain']
+            units.append([(chain, str(k)) for k in
+                          range(one['unit'],
+                                len(assembly.chains[chain]) + 1)])
+            linkers.append([(chain, str(k)) for k in
+                            range(one['anchor'] + 1, one['unit'])])
+        apart = [(units[i], units[j], UNITS_APART)
+                 for i in range(len(units)) for j in range(i + 1, len(units))]
+        for i, linker in enumerate(linkers):
+            for j, unit in enumerate(units):
+                near = LINKER_JUNCTION if i == j else 0
+                apart.append((linker[:len(linker) - near or None],
+                              unit[near:], LINKER_APART))
         settings['free_residues'] = set(settings['free_residues']) | mobile
         settings['dynamics'] = {
-            'mobile': mobile, 'pull': pull, 'rigid': rigid,
+            'mobile': mobile, 'pull': pull, 'rigid': rigid, 'apart': apart,
             'pull_ps': PULL_PS, 'settle_ps': SETTLE_PS,
             'temperature': 300.0, 'label': 'Collapsing the linkers'}
     return prep.prepare_job('%' + source, name, _self=_self, **settings)
@@ -2068,6 +2325,12 @@ def finish(assembly, job, source, _self=cmd):
     if flipped:
         assembly.warn('refinement inverted residues (now D): %s' % ', '.join(
             '%s/%s' % key for key in flipped))
+    tags = [tag for part, tag in assembly.tags().items()
+            if part.startswith('fusion')]
+    for a, b, closest in unit_contacts(job.name, tags, _self):
+        assembly.warn('fused units %s and %s touch: heavy atoms %.1f A '
+                      'apart (a longer linker, another site or the '
+                      '"relaxed" linker shape may help)' % (a, b, closest))
     stretched = long_peptide_bonds(job.name, _self)
     if stretched:
         assembly.warn('peptide bonds still longer than 1.5 A: %s' % ', '.join(
@@ -2104,6 +2367,33 @@ def inverted_residues(before, after, _self=cmd):
                   key=lambda k: (k[0], int(k[1])))
 
 
+def unit_contacts(name, tags, _self=cmd, limit=UNITS_CONTACT):
+    '''
+    How close the fused units come to each other in the model
+
+    :param tags: the "custom" tags of the fused units
+    :return: [(tag, tag, closest heavy-atom distance A)] within limit
+    '''
+    from scipy.spatial import cKDTree
+    coords = {}
+    for tag in tags:
+        xyz = _self.get_coords('%%%s and custom %s and not hydro' %
+                               (name, tag))
+        if xyz is not None and len(xyz):
+            coords[tag] = np.array(xyz)
+    found = []
+    for i, a in enumerate(sorted(coords)):
+        for b in sorted(coords)[i + 1:]:
+            pairs = cKDTree(coords[a]).query_ball_tree(cKDTree(coords[b]),
+                                                       limit)
+            if any(pairs):
+                closest = min(
+                    float(np.linalg.norm(coords[a][x] - coords[b][y]))
+                    for x, ys in enumerate(pairs) for y in ys)
+                found.append((a, b, closest))
+    return found
+
+
 def long_peptide_bonds(name, _self=cmd, limit=1.5):
     '''
     :return: [(chain, resi, next resi, C-N distance)] longer than limit
@@ -2132,6 +2422,8 @@ def build_antibody(fab1, fc, fab2='', template=DEFAULT_TEMPLATE, hinge='',
                    scfv_position='fv', linker1='', linker2='',
                    orientation1='', orientation2='',
                    fusion_linkers='relaxed',
+                   fab1_antigens='', fab2_antigens='', fc_antigens='',
+                   rigid_antigens=0,
                    forcefield='amber14', platform='auto', state=-1, quiet=0,
                    *, _self=cmd):
     '''
@@ -2231,7 +2523,10 @@ SEE ALSO
                         arms, fusions, str(scfv_position).strip().lower(),
                         (linker1, linker2), (orientation1, orientation2),
                         fusion_linkers=str(fusion_linkers).strip().lower(),
+                        antigens=(fab1_antigens, fab2_antigens,
+                                  fc_antigens),
                         _self=_self)
+    assembly.rigid_antigens = bool(int(rigid_antigens))
     assembly.disulfides = pairs
     name = object_name(name, _self)
     if int(refine):

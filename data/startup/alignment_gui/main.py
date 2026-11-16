@@ -52,17 +52,19 @@ class AlignmentDialog(QtWidgets.QDialog):
         form.addWidget(QtWidgets.QLabel('Mobile Selection', self), 1, 0)
         form.addWidget(self.mobile, 1, 1)
         form.addWidget(self.mobile_state, 1, 2)
+        self.mobile_chains, self.mobile_residues = self._region_row(form, 2)
 
         self.target = self._selection_combo()
         self.target_state = self._state_spin()
-        form.addWidget(QtWidgets.QLabel('Target Selection', self), 2, 0)
-        form.addWidget(self.target, 2, 1)
-        form.addWidget(self.target_state, 2, 2)
+        form.addWidget(QtWidgets.QLabel('Target Selection', self), 3, 0)
+        form.addWidget(self.target, 3, 1)
+        form.addWidget(self.target_state, 3, 2)
+        self.target_chains, self.target_residues = self._region_row(form, 4)
 
         self.object_name = QtWidgets.QLineEdit(self)
         self.object_name.setPlaceholderText('name of alignment object')
-        form.addWidget(QtWidgets.QLabel('Create alignment object', self), 3, 0)
-        form.addWidget(self.object_name, 3, 1, 1, 2)
+        form.addWidget(QtWidgets.QLabel('Create alignment object', self), 5, 0)
+        form.addWidget(self.object_name, 5, 1, 1, 2)
 
         # outlier rejection (methods with "cycles")
         self.outlier_rejection = QtWidgets.QCheckBox('Outlier rejection', self)
@@ -107,6 +109,10 @@ class AlignmentDialog(QtWidgets.QDialog):
             self.method.currentIndexChanged,
             self.mobile.currentTextChanged,
             self.target.currentTextChanged,
+            self.mobile_chains.textChanged,
+            self.mobile_residues.textChanged,
+            self.target_chains.textChanged,
+            self.target_residues.textChanged,
             self.mobile_state.valueChanged,
             self.target_state.valueChanged,
             self.object_name.textChanged,
@@ -117,6 +123,30 @@ class AlignmentDialog(QtWidgets.QDialog):
             signal.connect(self.update_preview)
 
         self.refresh()
+
+    def _region_row(self, form, row):
+        '''
+        "Chains" and "Residues" under a selection: the part of it to fit
+        on. Empty means all of it.
+        '''
+        line = QtWidgets.QHBoxLayout()
+        line.setContentsMargins(0, 0, 0, 0)
+        chains = QtWidgets.QLineEdit(self)
+        chains.setPlaceholderText('all chains, e.g. H or H+L')
+        chains.setToolTip('Fit on these chains only; the whole object '
+                          'still moves')
+        residues = QtWidgets.QLineEdit(self)
+        residues.setPlaceholderText('all residues, e.g. 1-120 or 10-20, 44')
+        residues.setToolTip('Fit on these residues only; the whole object '
+                            'still moves')
+        for label, widget in (('Chains', chains), ('Residues', residues)):
+            tag = QtWidgets.QLabel(label, self)
+            tag.setObjectName('prep_note')
+            line.addWidget(tag)
+            line.addWidget(widget, 1)
+        form.addWidget(QtWidgets.QLabel('', self), row, 0)
+        form.addLayout(line, row, 1, 1, 2)
+        return chains, residues
 
     def _selection_combo(self):
         combo = QtWidgets.QComboBox(self)
@@ -165,6 +195,10 @@ class AlignmentDialog(QtWidgets.QDialog):
             outlier_rejection=self.outlier_rejection.isChecked(),
             cycles=self.cycles.value(),
             cutoff=self.cutoff.value(),
+            mobile_chains=self.mobile_chains.text(),
+            mobile_residues=self.mobile_residues.text(),
+            target_chains=self.target_chains.text(),
+            target_residues=self.target_residues.text(),
             _self=self.cmd)
 
     def update_preview(self, *_):
@@ -175,10 +209,22 @@ class AlignmentDialog(QtWidgets.QDialog):
         self.outlier_rejection.setEnabled(outliers)
         self.outlier_frame.setEnabled(
             outliers and self.outlier_rejection.isChecked())
-        self.preview.setPlainText(command.format_command(*self.command_parts()))
+        try:
+            parts = self.command_parts()
+        except ValueError as e:      # chains or residues not understood
+            self.preview.setPlainText(str(e))
+            self.ok_button.setEnabled(False)
+            return
+        self.ok_button.setEnabled(True)
+        self.preview.setPlainText(command.format_command(*parts))
 
     def run(self):
-        text = command.format_command(*self.command_parts(), multiline=False)
+        try:
+            parts = self.command_parts()
+        except ValueError as e:
+            self.preview.setPlainText(str(e))
+            return
+        text = command.format_command(*parts, multiline=False)
         self.cmd.do(text)
         self.accept()
 

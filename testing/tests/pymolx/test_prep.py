@@ -484,7 +484,9 @@ def test_chosen_disulfides():
     # another pair: the chosen cysteines brought together
     assert prep.parse_disulfides('/58-/125, /12-/13') == [
         (('', '58'), ('', '125')), (('', '12'), ('', '13'))]
-    job = prep.prepare_job('il2', 'moved', platform='CPU',
+    # (default platform: closing cysteines 13 A apart runs dynamics, some
+    # minutes on the CPU)
+    job = prep.prepare_job('il2', 'moved',
                            disulfide_pairs=prep.parse_disulfides(
                                '/58-/125, /12-/13'))
     job.run()
@@ -504,7 +506,7 @@ def test_chosen_disulfides():
     (a, b, before, after), = job.report['disulfides_closed']
     assert before > 12 and after < 2.3
     # extra pairs: made besides the automatic ones (here: those off)
-    job = prep.prepare_job('il2', 'extra', platform='CPU', disulfides=False,
+    job = prep.prepare_job('il2', 'extra', disulfides=False,
                            extra_disulfides=[(('', '58'), ('', '125'))])
     job.run()
     job.apply(cmd)

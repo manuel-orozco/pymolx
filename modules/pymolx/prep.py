@@ -53,18 +53,22 @@ PULL_K = 500.0         # kJ/mol/nm^2 of its pulling restraints (the
                        # network spreads it, so it can be firm)
 ENM_K = 2000.0         # kJ/mol/nm^2 holding a moving domain's shape
 ENM_CUTOFF = 8.0       # A between the atoms it bonds
+APART_K = 1000.0       # kJ/mol/nm^2 keeping moving groups clear of each
+                       # other (flat-bottomed: it acts only within
+                       # "apart"'s distance, so contact is allowed, being
+                       # jammed together is not)
 GUARD_TOLERANCE = 0.5  # rad: chirality guard's free range around L
 DISULFIDE_FREE = 2.5   # A: chosen disulfides farther apart move freely
 DISULFIDE_FAR = 8.0    # A: ... and this far apart, noted
 DISULFIDE_CLOSE = 3.0  # A: ... and farther apart than this, closed by a
                        # pull in dynamics before their bond is switched on
 DISULFIDE_FLANK = 4    # residues each side of such a cysteine that move
-DISULFIDE_PULL_PS = 20  # ps per round of that pull
-DISULFIDE_STIFFNESS = (1000.0, 20000.0)  # kJ/mol/nm^2 of the S-S bond in
-                       # each round (the force field's: ~140000): the soft
-                       # one draws the pair together, the stiff one (S-S
-                       # within ~0.1 A of its length at 300 K, against
-                       # ~0.5 A) settles it before the full bond
+DISULFIDE_ROUNDS = ((1000.0, 10), (20000.0, 5))  # (kJ/mol/nm^2 of the S-S
+                       # bond, ps) of each round of closing (the force
+                       # field's bond: ~140000): the soft one draws the
+                       # pair together, the stiff one (S-S within ~0.1 A of
+                       # its length at 300 K, against ~0.5 A) settles it
+                       # before the full bond
 
 # protonation variants (OpenMM Modeller names): (protonated, deprotonated)
 TITRATABLE = {'ASP': ('ASH', 'ASP'), 'GLU': ('GLH', 'GLU'),
@@ -287,6 +291,8 @@ class PrepJob:
         self.diagnostics = True     # (for the caller)
         self.dynamics = None        # short dynamics of some residues after
                                     # the minimization (_dynamics)
+        self.fixed_residues = set()  # (chain, resi): held where they are
+                                     # (massless), e.g. a rigid antigen
         self.free_residues = set()  # (chain, resi): moved like built ones
                                     # (not restrained, e.g. a stitched
                                     # hinge, pymolx.antibody)
@@ -1385,6 +1391,21 @@ class PrepJob:
             restraint.setForceGroup(1)
             system.addForce(restraint)
 
+        # residues held where they are, every atom of them (e.g. an
+        # antigen carried in with its Fab, kept rigid)
+        held = set()
+        if self.fixed_residues:
+            wanted = {(str(c), str(r)) for c, r in self.fixed_residues}
+            for atom in list(topology.atoms())[:n_structure]:
+                key = self._author_key(atom)
+                # only what came in with them: hydrogens and residues
+                # built into their gaps still have to relax
+                if (key[0], key[1]) in wanted and \
+                        self._atom_key(atom) in self.input_atoms:
+                    held.add(atom.index)
+                    system.setParticleMass(atom.index, 0.0)
+            self.report['fixed_atoms'] = len(held)
+
         # metal sites: the metal and the atoms it binds stay where they are
         # (a nonbonded ion model distorts them: its van der Waals sphere
         # pushes partners away, without it charges collapse onto it)
@@ -1394,6 +1415,7 @@ class PrepJob:
             for a, b in self._metal_pairs:
                 if a in index and b in index:
                     site_atoms |= {index[a], index[b]}
+            site_atoms -= held
             for i in site_atoms:
                 system.setParticleMass(i, 0.0)
             self.report['metal_fixed_atoms'] = len(site_atoms)
@@ -1405,7 +1427,7 @@ class PrepJob:
         for atom in list(topology.atoms())[:n_structure]:
             if atom.element is not None and atom.element.symbol != 'H' and \
                     self._atom_key(atom) in self.input_atoms and \
-                    atom.index not in site_atoms:
+                    atom.index not in site_atoms and atom.index not in held:
                 fixed[atom.index] = system.getParticleMass(atom.index)
                 system.setParticleMass(atom.index, 0.0)
         # built residues and the ones joining them are guided to L
@@ -1609,6 +1631,9 @@ class PrepJob:
         if site_atoms:
             say('  metal sites held fixed: %d atoms (metals and the atoms '
                 'they bind)' % len(site_atoms))
+        if held:
+            say('  held where they are: %d atoms in %d residues' % (
+                len(held), len(self.fixed_residues)))
         if built:
             problems = self._build_problems(self.topology, self.positions)
             say('  built atoms: %d; %s' % (
@@ -1679,12 +1704,12 @@ class PrepJob:
                         at = keys.index((sg[0], sg[1]))
                         mobile.update(keys[max(0, at - DISULFIDE_FLANK):
                                            at + DISULFIDE_FLANK + 1])
-        settings = {'mobile': mobile, 'pull_ps': DISULFIDE_PULL_PS,
-                    'settle_ps': 0, 'temperature': 300.0,
-                    'label': 'Closing disulfide bonds', 'pull': []}
-        for k in DISULFIDE_STIFFNESS:
+        for k, picoseconds in DISULFIDE_ROUNDS:
             for force, term, (i, j, r0, _), _, _, _ in closing:
                 force.setBondParameters(term, i, j, r0, k)
+            settings = {'mobile': mobile, 'pull_ps': picoseconds,
+                        'settle_ps': 0, 'temperature': 300.0,
+                        'label': 'Closing disulfide bonds', 'pull': []}
             context = self._dynamics(openmm, unit, system, context, platform,
                                      topology, n_structure, settings)
         for force, term, parameters, _, _, _ in closing:
@@ -1724,8 +1749,9 @@ class PrepJob:
 
         self.dynamics: {'mobile': {(chain, resi)}, 'pull': [(anchor atom
         (chain, resi, name), atoms pulled toward it, distance A, k)],
-        'rigid': [atoms of each group to hold in shape], 'pull_ps',
-        'settle_ps', 'temperature', 'label'}
+        'rigid': [atoms of each group to hold in shape], 'apart':
+        [(residues, residues, distance A)] kept that far from each
+        other, 'pull_ps', 'settle_ps', 'temperature', 'label'}
 
         :return: the context to carry on with (a new one)
         '''
@@ -1785,6 +1811,50 @@ class PrepJob:
         system.addForce(pull)
         added += 1
 
+        # groups kept clear of each other (two units drawn in toward
+        # neighboring anchors meet in the middle; van der Waals alone
+        # stops them overlapping but leaves them jammed together)
+        apart = [one for one in settings.get('apart', ())
+                 if one[0] and one[1]]
+        if apart:
+            residue_atoms = {}
+            for atom in atoms[:n_structure]:
+                if atom.element is not None and atom.element.symbol != 'H':
+                    key = self._author_key(atom)
+                    residue_atoms.setdefault(key[:2], []).append(atom.index)
+
+            def group(residues):
+                return {i for r in residues
+                        for i in residue_atoms.get((str(r[0]), str(r[1])),
+                                                   ())}
+
+            # one force per clearance (a global parameter holds one
+            # distance, and pairs ask for different ones)
+            by_distance = {}
+            for first, second, distance in apart:
+                a, b = group(first), group(second)
+                if a and b and not (a & b):
+                    by_distance.setdefault(float(distance), []).append((a, b))
+            for n, (distance, groups) in enumerate(
+                    sorted(by_distance.items())):
+                # (its own parameter names: forces can't disagree on one)
+                repel = openmm.CustomNonbondedForce(
+                    '0.5*k_apart%d*(d_apart%d-r)^2' % (n, n))
+                repel.addGlobalParameter('k_apart%d' % n, APART_K)
+                repel.addGlobalParameter('d_apart%d' % n, distance / 10.0)
+                repel.setNonbondedMethod(
+                    openmm.CustomNonbondedForce.CutoffNonPeriodic)
+                repel.setCutoffDistance(distance / 10.0)
+                for _ in range(system.getNumParticles()):
+                    repel.addParticle([])
+                for a, b in groups:
+                    repel.addInteractionGroup(a, b)
+                repel.setForceGroup(4)
+                system.addForce(repel)
+                added += 1
+                self._say('  dynamics: %d group pair(s) kept %g A clear of '
+                          'each other' % (len(groups), distance))
+
         # a new context: the system gained forces, and this one integrates
         del context
         integrator = openmm.LangevinMiddleIntegrator(
@@ -1839,6 +1909,14 @@ class PrepJob:
                 '%.0f to %.0f A' % pair for pair in zip(before, spans))
             if spans else 'nothing pulled'))
         moved = context.getState(getPositions=True).getPositions()
+        if not math.isfinite(context.getState(getEnergy=True)
+                             .getPotentialEnergy()
+                             .value_in_unit(unit.kilojoule_per_mole)):
+            # it ended badly: the structure as it was before, so the
+            # caller's minimization has something finite to start from
+            moved = positions
+            self._say('  dynamics: it blew up and was left out; the '
+                      'residues stayed where they were')
         for index, mass in masses.items():
             system.setParticleMass(index, mass)
         for _ in range(added):               # the pull and the network

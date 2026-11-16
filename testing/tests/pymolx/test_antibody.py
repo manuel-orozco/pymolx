@@ -427,6 +427,50 @@ def test_collapsed_linker_setup(pdb):
             is None
 
 
+def test_collapsed_units_kept_apart(pdb):
+    # two units drawn in toward anchors side by side on the Fc meet in
+    # the middle: they are kept clear of each other while they move
+    split_template(pdb)
+    make_scfv()
+    a = antibody.assemble('fab', 'fc', 'fab2', '1hzh',
+                          fusions='heavy:scfv:(G4S)3',
+                          fusion_linkers='collapsed')
+    assert len(a.collapse) == 2
+    pytest.importorskip('openmm')
+    pytest.importorskip('pdbfixer')
+    name = antibody.load(a, 'built')
+    job = antibody.refine_job(a, name, 'refined', minimize=False)
+    apart = job.dynamics['apart']
+    units = [one for one in apart if one[2] == antibody.UNITS_APART]
+    linkers = [one for one in apart if one[2] == antibody.LINKER_APART]
+    # the two units from each other, and each linker from each unit
+    (first, second, _), = units
+    assert len(linkers) == 4
+    chains = {one['chain'] for one in a.collapse}
+    assert {r[0] for r in first} | {r[0] for r in second} == chains
+    assert not set(first) & set(second)
+    for one, residues in zip(a.collapse, (first, second)):
+        assert (one['chain'], str(one['unit'])) in residues
+        assert (one['chain'],
+                str(len(a.chains[one['chain']]))) in residues
+    # a linker and the unit it is bonded to: the residues at the bond are
+    # left out of the clearance, so they can still reach it
+    one = a.collapse[0]
+    own, = [(x, y) for x, y, _ in linkers
+            if x[0][0] == one['chain'] and y[0][0] == one['chain']]
+    assert (one['chain'], str(one['anchor'] + 1)) in own[0]
+    assert (one['chain'], str(one['unit'] - 1)) not in own[0]
+    assert (one['chain'], str(one['unit'])) not in own[1]
+    assert (one['chain'],
+            str(one['unit'] + antibody.LINKER_JUNCTION)) in own[1]
+    # one unit: its linker still kept off it, nothing else
+    b = antibody.assemble('fab', 'fc', 'fab2', '1hzh',
+                          fusions='heavy1:scfv:(G4S)3',
+                          fusion_linkers='collapsed')
+    only = antibody.refine_job(b, name, 'x', minimize=False).dynamics['apart']
+    assert [one[2] for one in only] == [antibody.LINKER_APART]
+
+
 def test_collapsed_linker_runs(pdb):
     pytest.importorskip('openmm')
     pytest.importorskip('pdbfixer')
@@ -629,6 +673,224 @@ def test_command_one_undo_step(pdb):
     assert 'model_' in cmd.get_names()
 
 
+def test_parse_antigen_chains():
+    assert antibody.parse_antigen_chains('C') == ['C']
+    assert antibody.parse_antigen_chains('C+D') == ['C', 'D']
+    assert antibody.parse_antigen_chains('C, D') == ['C', 'D']
+    assert antibody.parse_antigen_chains('') == []
+    # a second copy of a chain takes the next free letter, so they pair
+    assert antibody._free_chain_id('C', set('HKLM')) == 'C'
+    assert antibody._free_chain_id('C', set('HKLMC')) == 'D'
+    assert antibody._free_chain_id('Z', set('HKLMZ')) == '0'
+
+
+def test_carried_chains(pdb):
+    # a Fab-antigen complex: the antigen rides with its Fab onto the
+    # template, keeping its own numbering
+    split_template(pdb)
+    cmd.load(pdb['1n8z'], 'cplx')
+    cmd.remove('cplx and not polymer')
+    a = antibody.assemble('cplx', 'fc', 'cplx', '1hzh',
+                          fab1_chains='BA', fab2_chains='BA',
+                          antigens=('C', 'C', ''))
+    assert sorted(a.carried) == ['C', 'D']        # the two copies
+    assert a.carried['C'] == ('antigen_fab1', 'cplx', 'C')
+    assert a.carried['D'] == ('antigen_fab2', 'cplx', 'C')
+    assert a.tags()['antigen_fab1'] == 'AGN1'
+    # its own numbering, not 1..N like the stitched chains
+    source = antibody.read_chain('cplx', 'C', -1, cmd)
+    assert a.numbers('C') == [r.resi for r in source]
+    assert a.numbers('H') == [str(k) for k in range(1, len(a.chains['H']) + 1)]
+    name = antibody.load(a, 'with_antigen')
+    assert sorted(cmd.get_chains(name)) == ['C', 'D', 'H', 'K', 'L', 'M']
+    first, last = source[0].resi, source[-1].resi
+    numbers = []
+    cmd.iterate('%s and chain C and name CA' % name,
+                'numbers.append(resi)', space={'numbers': numbers})
+    assert numbers[0] == first and numbers[-1] == last
+    assert cmd.count_atoms('%s and custom AGN1' % name) > 0
+    # the epitope is kept: the antigen moved with its Fab
+    close = cmd.count_atoms('(%s and chain C) within 4 of (%s and chain H+L)'
+                            % (name, name))
+    assert close > 20
+    # a chain that isn't there, and a part that isn't in the model
+    with pytest.raises(ValueError, match='no protein chain'):
+        antibody.assemble('cplx', 'fc', 'cplx', '1hzh', fab1_chains='BA',
+                          fab2_chains='BA', antigens=('Z', '', ''))
+    with pytest.raises(ValueError, match="can't be placed"):
+        antibody.assemble('cplx', 'fc', '', '1hzh', fab1_chains='BA',
+                          arms='fab+none', antigens=('', 'C', ''))
+
+
+def test_carried_chains_disulfides(pdb):
+    # a receptor bound to the Fc: its own disulfide bonds are not the
+    # model's to choose, and naming its part must not fail (it did:
+    # KeyError 'antigen_fc' when the chooser named the pair)
+    split_template(pdb)
+    cmd.load(pdb['1n8z'], 'cplx')
+    cmd.remove('cplx and not polymer')
+    cmd.create('rec', 'cplx and chain C')
+    cmd.alter('rec', 'chain="R"')
+    cmd.create('fc_rec', 'fc or rec', zoom=0)
+    a = antibody.assemble('fab', 'fc_rec', 'fab2', '1hzh',
+                          fc_chains='H,K', antigens=('', '', 'R'))
+    assert a.labels['antigen_fc'] == 'receptor on the Fc'
+    pairs = antibody.cysteine_pairs(a)
+    inside = [p for p in pairs if p['carried']]
+    assert inside and all(p['a'][0] == p['b'][0] == 'R' for p in inside)
+    assert [p for p in pairs if not p['carried']]
+    # chosen bonds: the carried chain keeps its own whatever is picked
+    a.disulfides = [(('H', '229'), ('K', '229'))]
+    name = antibody.load(a, 'built')
+    job = antibody.refine_job(a, name, 'refined', cmd, minimize=False)
+    chosen = set(map(frozenset, job.disulfide_pairs))
+    assert frozenset((('H', '229'), ('K', '229'))) in chosen
+    bonded = [p for p in inside if p['bonded']]
+    assert bonded
+    for p in bonded:
+        assert frozenset((p['a'], p['b'])) in chosen
+    # the overlap report names the part too
+    antibody._report_overlaps(a)
+
+
+def test_carried_chain_numbering(pdb):
+    # a carried chain keeps its own numbering, which can run past where
+    # het groups start: its glycans must not land on its own residues
+    # (they did, and the refinement then failed with "No template found
+    # ... missing 1 C atom")
+    split_template(pdb)
+    cmd.load(pdb['1n8z'], 'cplx')          # with its glycans
+    cmd.create('ag', 'cplx and chain C')
+    cmd.alter('ag', 'resi = str(int(resv) + 450)')
+    cmd.sort('ag')
+    cmd.create('fab_ag', '(cplx and chain A+B) or ag', zoom=0)
+    a = antibody.assemble('fab_ag', 'fc', 'fab2', '1hzh', fab1_chains='BA',
+                          antigens=('C', '', ''))
+    numbers = [antibody._resi_parts(n)[0] for n in a.numbers('C')]
+    assert max(numbers) > antibody.GROUP_START
+    groups = a.group_numbers('C')
+    assert groups and min(groups) > max(numbers)
+    # the stitched chains still start theirs at GROUP_START
+    if a.groups.get('H'):
+        assert min(a.group_numbers('H')) == antibody.GROUP_START
+    name = antibody.load(a, 'numbered')
+    protein, het = [], []
+    cmd.iterate('%s and chain C and polymer and name CA' % name,
+                'protein.append(resv)', space={'protein': protein})
+    cmd.iterate('%s and chain C and not polymer' % name,
+                'het.append(resv)', space={'het': het})
+    assert protein and het
+    assert not set(protein) & set(het)        # no number used twice
+    # residues without coordinates keep their own number too
+    absent = [r for r in a.chains['C'] if not r.atoms]
+    if absent:
+        rows = []
+        cmd.iterate('%s and chain C and not present' % name,
+                    'rows.append(resi)', space={'rows': rows})
+        assert sorted(rows) == sorted(r.resi for r in absent)
+
+
+def test_fusion_carried_chains(pdb):
+    # an scFv in complex with its antigen, appended to both heavy chains:
+    # the antigen rides with the unit, and counts in the pose search
+    split_template(pdb)
+    make_scfv()
+    cmd.load(pdb['1n8z'], 'cplx')
+    cmd.remove('cplx and not polymer')
+    # a stand-in complex: the scFv with an antigen chain beside it
+    cmd.create('unit_ag', 'scfv or (cplx and chain C)', zoom=0)
+    spec = antibody.parse_fusions('heavy:unit_ag/K/C:(G4S)3')
+    assert [f['antigens'] for f in spec] == ['C', 'C']
+    assert [f['site'] for f in spec] == ['heavy1', 'heavy2']
+    # the old syntax still means no bound chains
+    assert antibody.parse_fusions('heavy1:unit_ag/K')[0]['antigens'] == ''
+
+    a = antibody.assemble('fab', 'fc', 'fab2', '1hzh', fusions=spec)
+    assert antibody.antigen_tag('fusion_heavy1') == 'AGNH1'
+    assert antibody.antigen_label('fusion_heavy2').startswith('antigen on')
+    carried = {c: part for c, (part, _, _) in a.carried.items()}
+    assert sorted(carried.values()) == ['antigen_fusion_heavy1',
+                                        'antigen_fusion_heavy2']
+    tags = a.tags()
+    assert tags['antigen_fusion_heavy1'] == 'AGNH1'
+    assert tags['antigen_fusion_heavy2'] == 'AGNH2'
+    assert a.labels['antigen_fusion_heavy1']
+    name = antibody.load(a, 'fused_ag')
+    # it rides with its unit: their geometry is the input's, whatever
+    # pose the unit was placed in
+    source = np.linalg.norm(
+        ca_coords('unit_ag and chain K').mean(axis=0) -
+        ca_coords('unit_ag and chain C').mean(axis=0))
+    for tag, unit in (('AGNH1', 'FUSH1'), ('AGNH2', 'FUSH2')):
+        assert cmd.count_atoms('%s and custom %s' % (name, tag)) > 0
+        here = np.linalg.norm(
+            ca_coords('%s and custom %s' % (name, unit)).mean(axis=0) -
+            ca_coords('%s and custom %s' % (name, tag)).mean(axis=0))
+        assert here == pytest.approx(source, abs=0.01)
+    # numbering of its own, past which its het groups are numbered
+    for chain in carried:
+        numbers = [antibody._resi_parts(n)[0] for n in a.numbers(chain)]
+        assert numbers == sorted(numbers)
+        groups = a.group_numbers(chain)
+        assert not groups or min(groups) > max(numbers)
+
+
+def test_carried_chains_refined(pdb):
+    pytest.importorskip('openmm')
+    pytest.importorskip('pdbfixer')
+    split_template(pdb)
+    cmd.load(pdb['1n8z'], 'cplx')
+    cmd.remove('cplx and not polymer')
+
+    def built(rigid, name):
+        return cmd.build_antibody('cplx', 'fc', 'cplx', '1hzh',
+                                  fab1_chains='BA', fab2_chains='BA',
+                                  fab1_antigens='C', fab2_antigens='C',
+                                  rigid_antigens=rigid, name=name, quiet=1)
+
+    def cas(name, chain):
+        rows = []
+        cmd.iterate_state(1, '%s and chain %s and name CA and present'
+                          % (name, chain), 'rows.append((resi, x, y, z))',
+                          space={'rows': rows})
+        return {r[0]: np.array(r[1:]) for r in rows}
+
+    plain = antibody.assemble('cplx', 'fc', 'cplx', '1hzh',
+                              fab1_chains='BA', fab2_chains='BA',
+                              antigens=('C', 'C', ''))
+    antibody.load(plain, 'plain')
+    start = cas('plain', 'C')
+
+    # the residues held: all but the ones built into the chain's own gaps
+    # and their neighbours, which have to relax or the loop can't close
+    residues = plain.chains['C']
+    numbers = plain.numbers('C')
+    free = set()
+    for k, r in enumerate(residues):
+        if not r.atoms:
+            free |= {numbers[i] for i in
+                     range(max(0, k - antibody.FREE_FLANK),
+                           min(len(residues), k + antibody.FREE_FLANK + 1))}
+    assert free                          # this antigen does have gaps
+
+    def moved(name, where='held'):
+        now = cas(name, 'C')
+        shared = {r for r in set(now) & set(start)
+                  if (r not in free) == (where == 'held')}
+        assert len(shared) > 10     # (the gap residues have no start)
+        return max(float(np.linalg.norm(now[r] - start[r])) for r in shared)
+
+    a = built(1, 'igg_rigid')
+    assert not a.warnings
+    assert any('held where they are' in line for line in a.log)
+    assert moved(a.name) < 0.01          # exactly where the Fab put it
+    assert moved(a.name, 'free') > 0.01  # ... but its own loops relaxed
+    b = built(0, 'igg_soft')
+    assert not any('held where they are' in line for line in b.log)
+    assert moved(b.name) > 0.01          # minimized with the rest
+    assert cmd.count_atoms('%s and chain C and hydro' % b.name) > 0
+
+
 def test_cysteine_pairs(pdb):
     for code in ('1hzh', '1n8z', '3ave'):
         cmd.load(pdb[code], code)
@@ -752,7 +1014,9 @@ def test_dialog(pdb):
         prompt = PartDialog('fab1', None, dialog, _self=cmd)
         prompt.object.setCurrentText('fab')
         prompt._accept()
-        assert prompt.spec() == {'object': 'fab', 'chains': ('H', 'L')}
+        assert prompt.spec() == {'object': 'fab',
+                                 'chains': ('H', 'L'),
+                                 'antigens': ''}
         prompt.deleteLater()
         prompt = PartDialog('hinge', None, dialog, _self=cmd)
         prompt._use_preset(prompt.preset.findText('Human IgG4'))
@@ -804,7 +1068,7 @@ def test_dialog(pdb):
         prompt._use_linker(prompt.linker_preset.findData('GGGGS' * 3))
         assert prompt.spec() == {
             'object': 'scfv', 'chains': ('K',), 'linker': 'GGGGS' * 3,
-            'orientation': '',
+            'orientation': '', 'antigens': '',
             'scfv_linker': antibody.DEFAULT_SCFV_LINKER}
         prompt.deleteLater()
         dialog.specs['fab2'] = {'object': 'scfv', 'chains': ('K',),
@@ -839,7 +1103,7 @@ def test_dialog(pdb):
         spec = prompt.spec()
         assert spec == {'object': 'scfv', 'chains': ('K',),
                         'linker': 'GGGGS' * 3, 'both': True,
-                        'kind': 'scfv', 'orientation': '',
+                        'kind': 'scfv', 'orientation': '', 'antigens': '',
                         'scfv_linker': antibody.DEFAULT_SCFV_LINKER,
                         'cdrs': 'out', 'linker_shape': 'relaxed'}
         # any sequence typed in (shorthand expanded), wrong letters shown
@@ -875,7 +1139,7 @@ def test_dialog(pdb):
             'scFv on heavy chain 1'
         assert dialog._arguments()['fusions'] == [
             {'site': 'heavy1', 'object': 'scfv', 'chain': 'K',
-             'linker': 'GGGGS' * 3, 'orientation': '',
+             'linker': 'GGGGS' * 3, 'orientation': '', 'antigens': '',
              'scfv_linker': antibody.DEFAULT_SCFV_LINKER, 'cdrs': 'out',
              'linker_shape': 'relaxed'}]
         dialog.specs['fusion_heavy1'] = None

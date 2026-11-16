@@ -648,6 +648,23 @@ class PartDialog(QtWidgets.QDialog):
             grid.addWidget(QtWidgets.QLabel(label, self.structure_box),
                            row + k, 0)
             grid.addWidget(combo, row + k, 1, 1, 2)
+        # chains of the same structure which are not the antibody: an
+        # antigen or a receptor bound to it, carried in with this part
+        self.antigens = None
+        if part in ARMS or part == 'fc' or part in FUSIONS:
+            row = grid.rowCount()
+            grid.addWidget(QtWidgets.QLabel('Bound chains',
+                                            self.structure_box), row, 0)
+            self.antigens = QtWidgets.QLineEdit(self.structure_box)
+            self.antigens.setObjectName('antibody_antigens')
+            self.antigens.setPlaceholderText(
+                'antigen or receptor chains, e.g. C or C+D; empty: none')
+            self.antigens.setToolTip(
+                'Chains of this structure bound to it (an antigen, a '
+                'receptor): carried into the model with this part, '
+                'keeping their own residue numbering')
+            self.antigens.setText((spec or {}).get('antigens', ''))
+            grid.addWidget(self.antigens, row, 1, 1, 2)
         grid.setColumnStretch(1, 1)
         self.chain_note = QtWidgets.QLabel(self.structure_box)
         self.chain_note.setObjectName('prep_note')
@@ -879,6 +896,8 @@ class PartDialog(QtWidgets.QDialog):
             return None
         result = {'object': self.object.currentText(),
                   'chains': tuple(c.currentData() for c in self.chains)}
+        if self.antigens is not None:
+            result['antigens'] = self.antigens.text().strip()
         if self.modes is not None:
             result['mode'] = self._mode()
             result['sequence'] = ''.join(
@@ -935,7 +954,10 @@ class DisulfideDialog(QtWidgets.QDialog):
         note.setObjectName('prep_note')
         note.setWordWrap(True)
         layout.addWidget(note)
-        self.pairs = antibody.cysteine_pairs(assembly)
+        # (a carried chain's own bonds are kept whatever is chosen:
+        # they aren't the model's to change, and there are many)
+        self.pairs = [p for p in antibody.cysteine_pairs(assembly)
+                      if not p['carried']]
         self.table = QtWidgets.QTableWidget(len(self.pairs), 3, self)
         self.table.setObjectName('antibody_disulfides')
         self.table.setHorizontalHeaderLabels(['Cysteines', 'Parts',
@@ -989,7 +1011,9 @@ class DisulfideDialog(QtWidgets.QDialog):
             QtWidgets.QDialogButtonBox.StandardButton.Cancel, self)
         automatic = buttons.addButton(
             'Automatic', QtWidgets.QDialogButtonBox.ButtonRole.ResetRole)
-        automatic.setToolTip('Those close enough to form by themselves')
+        automatic.setToolTip('Those close enough to form by themselves, '
+                              'and those between the chains of an IgG '
+                              '(heavy-light, the hinge\'s)')
         automatic.clicked.connect(self._automatic)
         buttons.accepted.connect(self._accept)
         buttons.rejected.connect(self.reject)
@@ -1158,7 +1182,14 @@ class AntibodyDialog(QtWidgets.QDialog):
                                'the hinge and the junctions move freely, '
                                'the rest is restrained')
         grid.addWidget(self.refine, 3, 0, 1, 2)
-        grid.addWidget(QtWidgets.QLabel('Disulfides', box), 4, 0)
+        self.rigid_antigens = QtWidgets.QCheckBox(
+            'Hold bound chains (antigens, receptors) rigid', box)
+        self.rigid_antigens.setObjectName('antibody_rigid_antigens')
+        self.rigid_antigens.setToolTip(
+            'Keep them exactly where the part they came with puts them; '
+            'unchecked, they are minimized with the rest')
+        grid.addWidget(self.rigid_antigens, 4, 0, 1, 2)
+        grid.addWidget(QtWidgets.QLabel('Disulfides', box), 5, 0)
         row = QtWidgets.QHBoxLayout()
         self.disulfide_label = QtWidgets.QLabel(box)
         self.disulfide_label.setObjectName('prep_note')
@@ -1168,7 +1199,7 @@ class AntibodyDialog(QtWidgets.QDialog):
                                          'disulfide bonds')
         self.disulfide_button.clicked.connect(self.choose_disulfides)
         row.addWidget(self.disulfide_button)
-        grid.addLayout(row, 4, 1)
+        grid.addLayout(row, 5, 1)
         right.addWidget(box)
         self.disulfides = None        # chosen pairs, or None: automatic
         self.disulfide_args = None    # for the parts they were chosen for
@@ -1202,7 +1233,8 @@ class AntibodyDialog(QtWidgets.QDialog):
 
     def _show_disulfides(self):
         self.disulfide_label.setText(
-            'by distance (automatic)' if self.disulfides is None else
+            'automatic (by distance, hinge, heavy-light)' if
+            self.disulfides is None else
             '%d chosen' % len(self.disulfides))
 
     def choose_disulfides(self):
@@ -1351,6 +1383,7 @@ class AntibodyDialog(QtWidgets.QDialog):
                 'single_position': self.position.currentData()}
         linkers = ['', '']
         orientations = ['', '']
+        antigens = ['', '', '']
         scfv_linkers = [antibody.DEFAULT_SCFV_LINKER] * 2
         for part in ARMS:
             if self.formats[part] == 'none':
@@ -1362,6 +1395,7 @@ class AntibodyDialog(QtWidgets.QDialog):
                     orientations[1] = s['fab1'].get('orientation', '')
                     scfv_linkers[1] = s['fab1'].get(
                         'scfv_linker', antibody.DEFAULT_SCFV_LINKER)
+                    antigens[1] = s['fab1'].get('antigens', '')
                     continue
                 raise ValueError('give the %s structure (click it)' %
                                  labels[part])
@@ -1371,6 +1405,7 @@ class AntibodyDialog(QtWidgets.QDialog):
             orientations[ARMS.index(part)] = s[part].get('orientation', '')
             scfv_linkers[ARMS.index(part)] = s[part].get(
                 'scfv_linker', antibody.DEFAULT_SCFV_LINKER)
+            antigens[ARMS.index(part)] = s[part].get('antigens', '')
         args['arm_linkers'] = tuple(linkers)
         args['arm_orientations'] = tuple(orientations)
         args['arm_scfv_linkers'] = tuple(scfv_linkers)
@@ -1383,6 +1418,8 @@ class AntibodyDialog(QtWidgets.QDialog):
             'template_chains': ','.join(s['template']['chains'] or ()),
             'chains': self.chain_ids.text().strip() or 'HLKM',
             'glycans': self.glycans.isChecked()})
+        antigens[2] = s['fc'].get('antigens', '')
+        args['antigens'] = tuple(antigens)
         args['fusions'] = [
             {'site': part[len('fusion_'):], 'object': s[part]['object'],
              'chain': s[part]['chains'][0], 'linker': s[part]['linker'],
@@ -1390,6 +1427,7 @@ class AntibodyDialog(QtWidgets.QDialog):
              'scfv_linker': s[part].get('scfv_linker',
                                         antibody.DEFAULT_SCFV_LINKER),
              'cdrs': s[part].get('cdrs', 'out'),
+             'antigens': s[part].get('antigens', ''),
              'linker_shape': s[part].get('linker_shape', 'relaxed')}
             for part in FUSIONS if s[part]]
         hinge = s['hinge']
@@ -1424,6 +1462,7 @@ class AntibodyDialog(QtWidgets.QDialog):
             self.disulfides = self.disulfide_args = None
             self._show_disulfides()
         self.assembly.disulfides = self.disulfides
+        self.assembly.rigid_antigens = self.rigid_antigens.isChecked()
         for line in self.assembly.log:
             self._say(line)
         if self.disulfides is not None:

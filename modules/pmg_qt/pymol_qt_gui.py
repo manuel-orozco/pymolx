@@ -17,6 +17,8 @@ import pymolx.gui.scripts
 import pymolx.gui.sequence_viewer
 import pymolx.gui.theme
 import pymolx.gui.toolbar
+import pymolx.gui.unsaved
+import pymolx.unsaved
 import pymolx.undo
 from pymol import colorprinting, save_shortcut
 
@@ -54,6 +56,7 @@ class PyMOLQtGUI(QtWidgets.QMainWindow, pymol._gui.PyMOLDesktopGUI):
 
     _ext_window_visible = True
     _initialdir = ''
+    _quit_confirmed = False     # pymolx: asked about unsaved changes
 
     def keyPressEvent(self, ev):
         args = keymapping.keyPressEventToPyMOLButtonArgs(ev)
@@ -62,7 +65,16 @@ class PyMOLQtGUI(QtWidgets.QMainWindow, pymol._gui.PyMOLDesktopGUI):
             self.pymolwidget.pymol.button(*args)
 
     def closeEvent(self, event):
+        if not self.confirm_unsaved():  # pymolx: offer to save first
+            event.ignore()
+            return
         self.cmd.quit()
+
+    def confirm_unsaved(self):
+        # pymolx: offer to save the session before quitting (asked once)
+        if not self._quit_confirmed:
+            self._quit_confirmed = pymolx.gui.unsaved.confirm(self, self.cmd)
+        return self._quit_confirmed
 
     # for thread-safe viewport command
     viewportsignal = QtCore.Signal(int, int)
@@ -117,6 +129,11 @@ class PyMOLQtGUI(QtWidgets.QMainWindow, pymol._gui.PyMOLDesktopGUI):
 
         # setting index -> callable
         self.setting_callbacks = defaultdict(list)
+
+        # pymolx: quitting from menus asks to save first, from the event
+        # loop (not inside PyMOL's command processing)
+        pymolx.unsaved._quit_handler = lambda: QtCore.QTimer.singleShot(
+            0, self.confirm_quit)
 
         # "session_file" setting in window title
         self.setting_callbacks[440].append(
@@ -839,7 +856,8 @@ PyMOL> color ye<TAB>    (will autocomplete "yellow")
         self.cmd.cd(dname or '.', quiet=0)
 
     def confirm_quit(self):
-        QtWidgets.QApplication.instance().quit()
+        if self.confirm_unsaved():  # pymolx: offer to save first
+            QtWidgets.QApplication.instance().quit()
 
     def settings_edit_all_dialog(self):
         from .advanced_settings_gui import PyMOLAdvancedSettings
@@ -929,6 +947,11 @@ PyMOL> color ye<TAB>    (will autocomplete "yellow")
         self.feedback_timer.start(500)
 
     def doPrompt(self):
+        # pymolx: "quit" typed here offers to save the session first
+        if re.match(r'\s*quit\b', self.command_get()) and \
+                not self.confirm_unsaved():
+            self.lineedit.clear()
+            return
         self.doTypedCommand(self.command_get())
         self.pymolwidget._pymolProcess()
         self.lineedit.clear()

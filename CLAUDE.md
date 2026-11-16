@@ -172,8 +172,14 @@ used in code and commits: [INCENTIVE_PARITY.md](INCENTIVE_PARITY.md).
 - A `QMenu.exec` in a slot blocks: a test that emits the signal hangs.
   Build the menu in a method the test can call, and disconnect the
   dialog's own slot before emitting.
+- The antibody builder numbers its stitched chains 1..N, but chains
+  carried in with a part (antigens, receptors) keep their own numbering:
+  use `assembly.numbers(chain)`, not `enumerate(residues, 1)`.
 - Kill test processes by PID, never `pkill -f` with a pattern that
   matches your own shell command.
+- Quitting the GUI by closing the window, File > Quit, the viewer
+  menu's quit or typing `quit` asks to save a changed session (`pymolx.unsaved`); a script's
+  `cmd.quit()` doesn't, so GUI test scripts still end with it.
 
 ## Working with the owner
 
