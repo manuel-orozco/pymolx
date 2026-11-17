@@ -430,7 +430,15 @@ class PredictionDialog(QtWidgets.QDialog):
         column.addWidget(drop)
         middle.addWidget(box, 1)
 
-        # the method
+        middle.addWidget(self._settings_box(), 1)
+
+        self.refresh()
+
+    def _settings_box(self):
+        '''
+        The box on the right: the method, the seeds, saving and running
+        (Epitope Prediction replaces it)
+        '''
         box = QtWidgets.QGroupBox('Prediction', self)
         box.setObjectName('prep_step')
         grid = QtWidgets.QGridLayout(box)
@@ -463,9 +471,7 @@ class PredictionDialog(QtWidgets.QDialog):
         self.submit_button.setObjectName('prediction_submit')
         self.submit_button.clicked.connect(self.submit_job)
         grid.addWidget(self.submit_button, 5, 0, 1, 2)
-        middle.addWidget(box, 1)
-
-        self.refresh()
+        return box
 
     # the sequences
 
@@ -666,8 +672,7 @@ class PredictionDialog(QtWidgets.QDialog):
             self.ligand_list.addItem(
                 code if copies == 1 else '%s  x%d' % (code, copies))
         method = self.method.currentData()
-        self.seeds.setEnabled(method == 'af3')
-        self.seed_label.setEnabled(method == 'af3')
+        self._method_changed(method)
         self.status.setText(self._status())
         self.save_button.setEnabled(bool(self.job.chains))
         running = self.process is not None
@@ -678,6 +683,13 @@ class PredictionDialog(QtWidgets.QDialog):
             'Run the prediction with a job script, here or through Slurm'
             if method == 'af3' else
             'Submitting is set up for AlphaFold 3 so far')
+
+    def _method_changed(self, method):
+        '''
+        Seeds are AlphaFold 3's (Epitope Prediction has its own settings)
+        '''
+        self.seeds.setEnabled(method == 'af3')
+        self.seed_label.setEnabled(method == 'af3')
 
     def _status(self):
         '''

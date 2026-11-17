@@ -15,8 +15,12 @@ Qt = QtCore.Qt
 _dialog = None
 
 ATOMS = [('C-alpha', 'ca'), ('Backbone', 'backbone'), ('Heavy atoms', 'heavy')]
-BEST_BY = [('ipTM', 'iptm'), ('pTM', 'ptm'), ('Ranking score', 'ranking'),
-           ('pLDDT', 'plddt')]
+BEST_BY = [('Antibody-antigen ipTM', 'ab_ag_iptm'), ('ipTM', 'iptm'),
+           ('pTM', 'ptm'), ('Ranking score', 'ranking'),
+           ('pLDDT', 'plddt'), ('Antibody-antigen PAE', 'ab_ag_pae')]
+MEASURES = [('Ligand RMSD (the antibody, antigen fitted)', 'ligand'),
+            ('Interface RMSD (the contacting residues)', 'interface'),
+            ('Epitope overlap (the antigen residues touched)', 'epitope')]
 METHODS = [('Hierarchical, average linkage', 'average'),
            ('Hierarchical, complete linkage', 'complete'),
            ('Hierarchical, single linkage', 'single'),
@@ -159,27 +163,39 @@ class ClusterDialog(QtWidgets.QDialog):
         detect = QtWidgets.QPushButton('Detect antibody and antigen', box)
         detect.clicked.connect(self.detect)
         grid.addWidget(detect, 2, 1)
-        grid.addWidget(QtWidgets.QLabel('Atoms', box), 3, 0)
+        grid.addWidget(QtWidgets.QLabel('Compare by', box), 3, 0)
+        self.measure = _combo(box, MEASURES)
+        self.measure.setObjectName('cluster_measure')
+        self.measure.setToolTip(
+            'Ligand RMSD: where the antibody sits once the antigen is '
+            'fitted.\nInterface RMSD: only the residues the two touch, so '
+            'domains far from the epitope don\'t sway it.\nEpitope '
+            'overlap: which antigen residues each model touches, as the '
+            'fraction not shared - where it binds, not how it is turned')
+        self.measure.currentIndexChanged.connect(self._measure_changed)
+        grid.addWidget(self.measure, 3, 1)
+        grid.addWidget(QtWidgets.QLabel('Atoms', box), 4, 0)
         self.atoms = _combo(box, ATOMS)
-        grid.addWidget(self.atoms, 3, 1)
-        grid.addWidget(QtWidgets.QLabel('Method', box), 4, 0)
+        grid.addWidget(self.atoms, 4, 1)
+        grid.addWidget(QtWidgets.QLabel('Method', box), 5, 0)
         self.method = _combo(box, METHODS)
-        grid.addWidget(self.method, 4, 1)
-        grid.addWidget(QtWidgets.QLabel('RMSD cutoff', box), 5, 0)
+        grid.addWidget(self.method, 5, 1)
+        self.cutoff_label = QtWidgets.QLabel('RMSD cutoff', box)
+        grid.addWidget(self.cutoff_label, 6, 0)
         self.cutoff = QtWidgets.QDoubleSpinBox(box)
         self.cutoff.setRange(0.1, 50.0)
         self.cutoff.setSingleStep(0.5)
         self.cutoff.setDecimals(1)
         self.cutoff.setValue(3.0)
         self.cutoff.setSuffix(' A')
-        grid.addWidget(self.cutoff, 5, 1)
-        grid.addWidget(QtWidgets.QLabel('Best model by', box), 6, 0)
+        grid.addWidget(self.cutoff, 6, 1)
+        grid.addWidget(QtWidgets.QLabel('Best model by', box), 7, 0)
         self.best_by = _combo(box, BEST_BY)
         self.best_by.setToolTip(
             'Scores from the predictor\'s JSON next to each model file '
             '(AlphaFold 3, Boltz, ColabFold); pLDDT from the B-factors')
-        grid.addWidget(self.best_by, 6, 1)
-        grid.addWidget(QtWidgets.QLabel('Scores folder', box), 7, 0)
+        grid.addWidget(self.best_by, 7, 1)
+        grid.addWidget(QtWidgets.QLabel('Scores folder', box), 8, 0)
         scores = QtWidgets.QHBoxLayout()
         self.scores = QtWidgets.QLineEdit(box)
         self.scores.setPlaceholderText('next to the loaded files')
@@ -191,8 +207,8 @@ class ClusterDialog(QtWidgets.QDialog):
         browse.setMaximumWidth(32)
         browse.clicked.connect(self._browse_scores)
         scores.addWidget(browse)
-        grid.addLayout(scores, 7, 1)
-        grid.addWidget(QtWidgets.QLabel('Scores CSV', box), 8, 0)
+        grid.addLayout(scores, 8, 1)
+        grid.addWidget(QtWidgets.QLabel('Scores CSV', box), 9, 0)
         scores_csv = QtWidgets.QHBoxLayout()
         self.scores_csv = QtWidgets.QLineEdit(box)
         self.scores_csv.setPlaceholderText('e.g. <job>_ranking_scores.csv')
@@ -206,18 +222,19 @@ class ClusterDialog(QtWidgets.QDialog):
         browse.setMaximumWidth(32)
         browse.clicked.connect(self._browse_csv)
         scores_csv.addWidget(browse)
-        grid.addLayout(scores_csv, 8, 1)
+        grid.addLayout(scores_csv, 9, 1)
         self.lower_better = QtWidgets.QCheckBox('Lower score is better', box)
         self.lower_better.setToolTip('Set from the score\'s name (e.g. a rank or an '
                               'energy); change it if needed')
-        grid.addWidget(self.lower_better, 9, 1)
+        grid.addWidget(self.lower_better, 10, 1)
         self.best_by.currentIndexChanged.connect(self._best_by_changed)
         self.superpose = QtWidgets.QCheckBox(
             'Superimpose all on the largest cluster', box)
         self.group = QtWidgets.QCheckBox('Group by cluster', box)
         self.color = QtWidgets.QCheckBox('Color by cluster', box)
+        self._measure_changed()
         for row, check in enumerate((self.superpose, self.group,
-                                     self.color), 10):
+                                     self.color), 11):
             check.setChecked(True)
             grid.addWidget(check, row, 0, 1, 2)
         left.addWidget(box)
@@ -318,6 +335,26 @@ class ClusterDialog(QtWidgets.QDialog):
                             if fit != rmsd else
                             'No antibody chains found: all polymer atoms')
 
+    def _measure_changed(self, *_):
+        '''
+        The epitope measure's cutoff is a fraction, not an Angstrom
+        '''
+        epitope = self.measure.currentData() == 'epitope'
+        self.cutoff_label.setText('Epitope not shared' if epitope
+                                  else 'RMSD cutoff')
+        self.cutoff.setSuffix('' if epitope else ' A')
+        self.atoms.setEnabled(not epitope)
+        if epitope and self.cutoff.value() > 1.0:
+            self.cutoff.setRange(0.05, 1.0)
+            self.cutoff.setSingleStep(0.05)
+            self.cutoff.setDecimals(2)
+            self.cutoff.setValue(cluster.EPITOPE_CUTOFF)
+        elif not epitope and self.cutoff.maximum() <= 1.0:
+            self.cutoff.setRange(0.1, 50.0)
+            self.cutoff.setSingleStep(0.5)
+            self.cutoff.setDecimals(1)
+            self.cutoff.setValue(3.0)
+
     def showEvent(self, event):
         self.refresh()
         super().showEvent(event)
@@ -337,6 +374,7 @@ class ClusterDialog(QtWidgets.QDialog):
                 ' '.join(models), self.fit.text(), self.rmsd.text(),
                 self.atoms.currentData(), self.cutoff.value(),
                 self.method.currentData(),
+                measure=self.measure.currentData(),
                 best_by=self.best_by.currentData(),
                 scores=self.scores.text().strip(),
                 scores_csv=self.scores_csv.text().strip(),

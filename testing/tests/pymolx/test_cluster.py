@@ -4,6 +4,7 @@ dialog, on made-up antibody-antigen "models": two binding poses, each
 model moved as a whole to somewhere else.
 '''
 
+import json
 import os
 
 import numpy as np
@@ -68,6 +69,176 @@ def models(poses=((0, 5), (120, 3)), plddt=None):
             names.append(name)
     cmd.delete('h l a')
     return names
+
+
+def _settle(name, centre, want=3.5):
+    """
+    Move the antibody of a model along the line from the antigen's centre
+    until its closest heavy atom is about "want" from the antigen
+    """
+    antibody = '%s and chain H+L' % name
+    antigen = '%s and chain A' % name
+
+    def closest():
+        xa = cmd.get_coords(antigen + ' and not hydro')
+        xb = cmd.get_coords(antibody + ' and not hydro')
+        return float(np.linalg.norm(xa[:, None] - xb[None], axis=2).min())
+
+    direction = cmd.get_coords(antibody).mean(axis=0) - centre
+    direction = direction / np.linalg.norm(direction)
+    for _ in range(300):
+        gap = closest()
+        if abs(gap - want) < 1.0:
+            return
+        step = direction * (1.0 if gap > want else -1.0)
+        cmd.load_coords(cmd.get_coords(antibody) - step, antibody)
+
+
+def touching_models(poses=((0, 3), (120, 3))):
+    '''
+    Like models(), but the antibody rests against the antigen, so the
+    two have contacts: each pose puts it on a different side
+    '''
+    cmd.fab(VH, 'h', chain='H', ss=1)
+    cmd.fab(VL, 'l', chain='L', ss=1)
+    cmd.fab(ANTIGEN, 'a', chain='A', ss=1)
+    cmd.create('ab', 'h or l')
+    cmd.delete('h l')
+    # centroids together, then apart along x until they just touch
+    cmd.translate(list(cmd.get_coords('a').mean(axis=0) -
+                       cmd.get_coords('ab').mean(axis=0)), 'ab', camera=0)
+
+    def closest():
+        xa = cmd.get_coords('a and not hydro')
+        xb = cmd.get_coords('ab and not hydro')
+        return float(np.linalg.norm(xa[:, None] - xb[None], axis=2).min())
+
+    for _ in range(200):
+        if closest() >= 3.0:
+            break
+        cmd.translate([1.0, 0, 0], 'ab', camera=0)
+    assert closest() < 5.0, 'the test models should touch'
+    centre = cmd.get_coords('a').mean(axis=0)
+    rng = np.random.default_rng(3)
+    names = []
+    for angle, count in poses:
+        for _ in range(count):
+            name = 'model_%d' % (len(names) + 1)
+            cmd.create(name, 'ab or a')
+            coords = cmd.get_coords('%s and chain H+L' % name)
+            turn = rotation([0, 0, 1], angle) @ rotation(
+                rng.normal(size=3), rng.normal(0, 0.5))
+            cmd.load_coords((coords - centre) @ turn.T + centre,
+                            '%s and chain H+L' % name)
+            _settle(name, centre)
+            whole = rotation(rng.normal(size=3), rng.uniform(0, 180))
+            cmd.load_coords((cmd.get_coords(name) - centre) @ whole.T +
+                            rng.normal(0, 20, 3), name)
+            names.append(name)
+    cmd.delete('ab a')
+    return names
+
+
+def test_measures():
+    # the same models seen three ways: the antibody's position, the
+    # contacting residues, and which antigen residues are touched
+    names = touching_models(((0, 3), (120, 3)))
+    seen = {}
+    for measure in cluster.MEASURES:
+        cutoff = 0.5 if measure == 'epitope' else 3.0
+        result = cluster.compute(cutoff=cutoff, measure=measure)
+        seen[measure] = sorted(sorted(c['members']) for c in result.clusters)
+        assert result.measure == measure
+    # each finds the two poses
+    for measure, clusters in seen.items():
+        assert len(clusters) == 2, measure
+        assert sorted(len(c) for c in clusters) == [3, 3], measure
+    assert seen['ligand'] == seen['epitope'] == seen['interface']
+    with pytest.raises(ValueError, match='measure must be'):
+        cluster.compute(measure='nonsense')
+
+
+def test_epitope_distances():
+    # the distance is how much of the contacted patch is not shared
+    names = touching_models(((0, 2), (120, 2)))
+    result = cluster.compute(cutoff=0.5, measure='epitope')
+    assert len(result.epitopes) == len(names)
+    assert all(e for e in result.epitopes)          # every model touches
+    assert all(chain == 'A' for e in result.epitopes for chain, _ in e)
+    same = result.matrix[0, 1]
+    apart = result.matrix[0, len(names) - 1]
+    assert 0 <= same < apart <= 1
+    # two models on the same patch share most of it
+    assert same < 0.5 < apart
+
+
+def test_interface_rmsd_ignores_distal_domains():
+    # a model whose antibody is turned far from the antigen, with the
+    # epitope untouched: ligand RMSD sees it, interface RMSD much less
+    names = touching_models(((0, 3),))
+    before = cluster.compute(cutoff=99.0, measure='interface').matrix
+    far = names[-1]
+    centre = cmd.get_coords('%s and chain A' % far).mean(axis=0)
+    coords = cmd.get_coords('%s and chain H+L' % far)
+    turned = rotation([0, 0, 1], 25)
+    cmd.load_coords((coords - centre) @ turned.T + centre,
+                    '%s and chain H+L' % far)
+    ligand = cluster.compute(cutoff=99.0, measure='ligand').matrix
+    interface = cluster.compute(cutoff=99.0, measure='interface').matrix
+    assert ligand[0, len(names) - 1] > interface[0, len(names) - 1]
+    assert before.shape == interface.shape
+
+
+def test_chain_pair_scores(tmp_path):
+    # AlphaFold 3's chain_pair_iptm, read for the antibody-antigen pair:
+    # its own documentation suggests it for such an interface, rather
+    # than the whole complex's ipTM
+    data = {'iptm': 0.9, 'ptm': 0.8, 'ranking_score': 0.85,
+            # chains A (antigen), H, L: A-H 0.4, A-L 0.3, H-L 0.95
+            'chain_pair_iptm': [[0.7, 0.4, 0.3],
+                                [0.4, 0.8, 0.95],
+                                [0.3, 0.95, 0.8]],
+            'chain_pair_pae_min': [[0.5, 9.0, 12.0],
+                                   [9.0, 0.5, 1.2],
+                                   [12.0, 1.2, 0.5]]}
+    path = tmp_path / 'scores.json'
+    path.write_text(json.dumps(data))
+    scores = cluster.read_scores(str(path), ['A', 'H', 'L'], ['H', 'L'])
+    # the best antibody-antigen pair, not the heavy-light one
+    assert scores['ab_ag_iptm'] == pytest.approx(0.4)
+    assert scores['ab_ag_pae'] == pytest.approx(9.0)
+    assert scores['iptm'] == pytest.approx(0.9)
+    # without the chains, only the whole-complex scores
+    assert 'ab_ag_iptm' not in cluster.read_scores(str(path))
+    # a mismatched chain list is ignored rather than guessed at
+    assert 'ab_ag_iptm' not in cluster.read_scores(
+        str(path), ['A', 'B'], ['B'])
+    # lower is better for a PAE, higher for the rest
+    assert cluster.higher_is_better('ab_ag_iptm')
+    assert not cluster.higher_is_better('ab_ag_pae')
+    assert cluster.higher_is_better('ranking')
+
+
+def test_clusters_ranked_by_size_and_confidence():
+    names = touching_models(((0, 4), (120, 2)))
+    result = cluster.compute(cutoff=3.0)
+    assert len(result.clusters) == 2
+    big, small = result.clusters
+    assert big['size'] == 4 and small['size'] == 2
+    # with no chain-pair scores, the order is by size
+    assert [c['cluster'] for c in result.ranked()] == [1, 2]
+    # the small cluster, confident; the large one, not
+    for i, model in enumerate(result.models):
+        value = 0.9 if model in small['members'] else 0.2
+        result.confidences[i]['ab_ag_iptm'] = value
+    again = cluster.Result(result.models, result.matrix, result.labels,
+                           result.scores, 1, 1, result.confidences)
+    big, small = again.clusters
+    assert big['mean_ab_ag_iptm'] == pytest.approx(0.2)
+    assert small['mean_ab_ag_iptm'] == pytest.approx(0.9)
+    # 4/4 x 0.2 = 0.20 against 2/4 x 0.9 = 0.45: the confident one leads
+    assert [c['cluster'] for c in again.ranked()] == [2, 1]
+    assert 'Ab-Ag ipTM' in again.table()
 
 
 def test_antibody_chains_detected():

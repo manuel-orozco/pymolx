@@ -16,7 +16,10 @@ used in code and commits: [INCENTIVE_PARITY.md](INCENTIVE_PARITY.md).
 
 - Run: `../pymolx-env/bin/pymol` (GUI). Headless: `pymol -cq script.py`.
 - Optional deps installed: rdkit, gemmi, scipy, openmm (CUDA), pdbfixer,
-  propka.
+  propka, anarci + hmmer (antibody numbering), torch (CPU build),
+  parapred-pytorch and Paragraph (paratope prediction, both installed
+  from GitHub; parapred's wheel leaves out its weights, which were
+  fetched into its package's weights/ folder by hand).
 
 ## Tests
 
@@ -62,7 +65,15 @@ used in code and commits: [INCENTIVE_PARITY.md](INCENTIVE_PARITY.md).
   `antibody_gui` (full IgG from Fab/scFv/VHH arms, hinge, Fc and
   C-terminal fusions, `pymolx.antibody`),
   `prediction_gui` (FASTA plus modifications, glycans and ligands as an
-  AlphaFold 3 / RoseTTAFold3 / ESMFold2 input file, `pymolx.prediction`).
+  AlphaFold 3 / RoseTTAFold3 / ESMFold2 input file, `pymolx.prediction`),
+  `epitope_gui` (the same for antibody-antigen cofolding with AlphaFold 3:
+  chain roles, many seeds, samples per seed, the antibody's MSA;
+  `pymolx.epitope`, subclasses `PredictionDialog` and replaces its
+  `_settings_box`),
+  `cdr_gui` (CDR loops of an antibody under IMGT/Kabat/Chothia/Martin/AHo
+  numbering, from a structure or a sequence, `pymolx.cdr`),
+  `paratope_gui` (binding residues by Parapred or Paragraph,
+  `pymolx.paratope`).
 - Theme: colors only in `COLORS` (`modules/pymolx/gui/theme.py`), used as
   `$name` in `data/pymolx/styles/dark.qss` (literal `$` must be `$$`).
   Icons: `data/pymolx/icons/*.svg` (own artwork; `<name>-on.svg` = checked).
@@ -175,6 +186,18 @@ used in code and commits: [INCENTIVE_PARITY.md](INCENTIVE_PARITY.md).
 - The antibody builder numbers its stitched chains 1..N, but chains
   carried in with a part (antigens, receptors) keep their own numbering:
   use `assembly.numbers(chain)`, not `enumerate(residues, 1)`.
+- Renumbering residues one at a time (`alter ... resi = N` per residue)
+  merges them when a new number collides with one not yet renumbered
+  (e.g. a chain numbered 1..470 renumbered to IMGT 1..128). Build a
+  {(chain, resi): (chain, resi)} map and do one pass:
+  `alter obj, "chain, resi = NEW.get((chain, resi), (chain, resi))"`.
+- ANARCI needs the real HMMER binaries, not the PyPI `hmmer` wheel's
+  console shims: the shim's temporary name reaches hmmscan's output
+  header, where Biopython's parser expects "hmmscan", so every alignment
+  coordinate comes back None and ANARCI dies in `_domains_are_same`
+  ("'<' not supported between instances of 'NoneType'"). Pass
+  `hmmerpath=cdr.hmmer_path()`. Not a Biopython version problem (1.85
+  fails the same way).
 - Kill test processes by PID, never `pkill -f` with a pattern that
   matches your own shell command.
 - Quitting the GUI by closing the window, File > Quit, the viewer

@@ -31,8 +31,34 @@ import re
 from pymol import cmd
 
 METHODS = ('average', 'complete', 'single', 'gromos')
-SCORES = {'iptm': 'ipTM', 'ptm': 'pTM', 'ranking': 'ranking score',
-          'plddt': 'pLDDT'}
+# what the distance between two models means
+MEASURES = {
+    'ligand': 'ligand RMSD: fit the antigen, measure the antibody',
+    'interface': 'interface RMSD: fit and measure the contacting '
+                 'residues of both (CAPRI\'s I-RMSD, blind to how the '
+                 'rest of the antibody sits)',
+    'epitope': 'epitope overlap: the antigen residues each model '
+               'contacts, as 1 - their Jaccard overlap (0 the same '
+               'patch, 1 no residue in common)',
+}
+DEFAULT_MEASURE = 'ligand'
+CONTACT = 5.0          # A between heavy atoms: a residue contact
+# a distance in the epitope measure is a fraction, not an Angstrom
+EPITOPE_CUTOFF = 0.5
+SCORES = {'ab_ag_iptm': 'antibody-antigen ipTM', 'iptm': 'ipTM',
+          'ptm': 'pTM', 'ranking': 'ranking score', 'plddt': 'pLDDT',
+          'ab_ag_pae': 'antibody-antigen PAE'}
+# AlphaFold 3's own advice for an antibody-antigen interface is the ipTM
+# of that chain pair (docs/output.md on "chain_pair_iptm": "Can be used
+# for ranking a specific interface between two chains, when you know that
+# they interact, e.g. for antibody-antigen interactions"), not the whole
+# complex's ipTM, which the always-confident heavy-light interface lifts
+AB_AG_SCORE = 'ab_ag_iptm'
+# confident / failed, from the same document's reading of ipTM
+IPTM_CONFIDENT = 0.8
+IPTM_FAILED = 0.6
+# scores of SCORES where a lower value is the better one
+LOWER_SCORES = ('ab_ag_pae',)
 # CSV column names meaning the scores above (lower case)
 SCORE_COLUMNS = {
     'iptm': 'iptm', 'ptm': 'ptm', 'plddt': 'plddt', 'mean_plddt': 'plddt',
@@ -43,7 +69,7 @@ SCORE_COLUMNS = {
 NAME_COLUMNS = ('model', 'name', 'object', 'file', 'filename', 'path',
                 'structure', 'id')
 # scores where lower is better (by their names)
-LOWER_IS_BETTER = ('rank', 'energy', 'rmsd', 'dg', 'kcal', 'clash')
+LOWER_IS_BETTER = ('rank', 'energy', 'rmsd', 'dg', 'kcal', 'clash', 'pae')
 ATOMS = {'ca': 'name CA', 'backbone': 'name N+CA+C+O',
          'heavy': 'not hydro'}
 # conserved motifs of antibody variable domains (heavy, light, VHH, scFv;
@@ -126,13 +152,52 @@ def _score_names(stem):
     return names
 
 
-def read_scores(path):
+def chain_pair_value(data, key, chains, antibody, best):
+    """
+    One value out of a [chains x chains] array of a confidence JSON, for
+    the antibody-antigen chain pairs
+
+    :param chains: the structure's chain IDs, in the order the array uses
+    :param antibody: the antibody's chain IDs
+    :param best: max (ipTM) or min (PAE)
+    :return: float, or None
+    """
+    matrix = data.get(key)
+    if not isinstance(matrix, list) or not chains:
+        return None
+    if len(matrix) != len(chains):
+        return None             # (not this structure's chains)
+    found = []
+    for i, chain_i in enumerate(chains):
+        for j, chain_j in enumerate(chains):
+            if i == j or (chain_i in antibody) == (chain_j in antibody):
+                continue        # (both the antibody's, or both not)
+            row = matrix[i]
+            if isinstance(row, list) and j < len(row) and \
+                    isinstance(row[j], (int, float)):
+                found.append(float(row[j]))
+    return best(found) if found else None
+
+
+def read_scores(path, chains=(), antibody=()):
     '''
-    :return: {'iptm', 'ptm', 'ranking': float} found in a score JSON
+    :param chains: the structure's chain IDs in order, and which of them
+        are the antibody's: for the antibody-antigen chain pair scores
+    :return: {'iptm', 'ptm', 'ranking', 'ab_ag_iptm', 'ab_ag_pae': float}
+        found in a score JSON
     '''
     with open(path) as handle:
         data = json.load(handle)
     scores = {}
+    if chains and antibody and not set(chains) <= set(antibody):
+        pair = chain_pair_value(data, 'chain_pair_iptm', chains, antibody,
+                                max)
+        if pair is not None:
+            scores['ab_ag_iptm'] = pair
+        pae = chain_pair_value(data, 'chain_pair_pae_min', chains,
+                               antibody, min)
+        if pae is not None:
+            scores['ab_ag_pae'] = pae
     for key, names in (('iptm', ('iptm', 'protein_iptm')),
                        ('ptm', ('ptm', 'protein_ptm')),
                        ('ranking', ('ranking_score', 'confidence_score'))):
@@ -146,12 +211,16 @@ def read_scores(path):
     return scores
 
 
-def find_scores(obj, folder=''):
+def find_scores(obj, folder='', chains=(), antibody=()):
     '''
     The confidence scores of a predicted model: from the JSON next to the
     file it was loaded from, or found in "folder" by the object's name
 
-    :return: ({'iptm', 'ptm', 'ranking': float}, path) or ({}, None)
+    :param chains, antibody: the structure's chain IDs in order and the
+        antibody's, for the antibody-antigen chain pair scores
+
+    :return: ({'iptm', 'ptm', 'ranking', 'ab_ag_iptm', ...}, path) or
+        ({}, None)
     '''
     from . import files
     places = []
@@ -168,7 +237,8 @@ def find_scores(obj, folder=''):
             candidate = os.path.join(directory, name)
             if os.path.isfile(candidate):
                 try:
-                    return read_scores(candidate), candidate
+                    return (read_scores(candidate, chains, antibody),
+                            candidate)
                 except (OSError, ValueError):
                     continue
     return {}, None
@@ -281,6 +351,8 @@ def match_scores(models, table):
 
 def higher_is_better(score):
     name = str(score).lower()
+    if name in LOWER_SCORES:
+        return False
     if name in SCORES or 'score' in name and 'rank' in name:
         return True
     return not any(word in name for word in LOWER_IS_BETTER)
@@ -337,6 +409,48 @@ def rmsd_matrix(fit, measure):
             rotation, translation = kabsch(fit[j], fit[i])
             moved = measure[j] @ rotation.T + translation
             d = np.sqrt(((moved - measure[i]) ** 2).sum(axis=1).mean())
+            matrix[i, j] = matrix[j, i] = d
+    return matrix
+
+
+def contact_residues(obj, side, other, state, cutoff=CONTACT, _self=cmd):
+    '''
+    The residues of "side" with a heavy atom within cutoff of "other"
+
+    :return: {(chain, resi)}
+    '''
+    found = set()
+    _self.iterate('(%%%s and (%s) and not hydro) within %g of '
+                  '(%%%s and (%s) and not hydro)'
+                  % (obj, side, cutoff, obj, other),
+                  'found.add((chain, resi))', space={'found': found})
+    return found
+
+
+def _residues_selection(keys):
+    """
+    "(chain A and resi 5+6) or (chain B and resi 9)" for {(chain, resi)}
+    """
+    by_chain = {}
+    for chain, resi in sorted(keys):
+        by_chain.setdefault(chain, []).append(str(resi))
+    return ' or '.join('(chain "%s" and resi %s)' % (chain, '+'.join(res))
+                       for chain, res in sorted(by_chain.items())) or 'none'
+
+
+def jaccard_matrix(sets):
+    '''
+    1 - the Jaccard overlap of each pair of sets (0: the same residues)
+
+    :return: symmetric matrix
+    '''
+    import numpy as np
+    n = len(sets)
+    matrix = np.zeros((n, n))
+    for i in range(n):
+        for j in range(i + 1, n):
+            union = sets[i] | sets[j]
+            d = 1.0 - len(sets[i] & sets[j]) / len(union) if union else 1.0
             matrix[i, j] = matrix[j, i] = d
     return matrix
 
@@ -402,6 +516,7 @@ class Result:
         self.scores = scores            # mean pLDDT/B per model (or None)
         self.fit_atoms = fit_atoms      # number of atoms
         self.rmsd_atoms = rmsd_atoms
+        self.measure = DEFAULT_MEASURE
         self.clusters = []
         for c in sorted(set(labels)):
             members = [i for i, label in enumerate(labels) if label == c]
@@ -416,7 +531,12 @@ class Result:
                 representative, spread = members[0], 0.0
             known = [scores[i] for i in members if scores[i] is not None]
             best, best_score, key = self._best(members)
+            confident = [self.confidences[i].get(AB_AG_SCORE)
+                         for i in members]
+            confident = [v for v in confident if isinstance(v, (int, float))]
             self.clusters.append({
+                'mean_ab_ag_iptm': (sum(confident) / len(confident)
+                                    if confident else None),
                 'cluster': c + 1,
                 'size': len(members),
                 'representative': models[representative],
@@ -448,16 +568,43 @@ class Result:
                 return members[k], values[k], key
         return None, None, None
 
+    def ranked(self):
+        '''
+        The clusters, most trustworthy first: a populated cluster of
+        confident models is the signal, a confident singleton rarely is.
+        Ranked by the number of models and the mean antibody-antigen
+        ipTM of their interfaces, when that is known.
+
+        :return: [cluster], a copy of the list
+        '''
+        known = [c for c in self.clusters
+                 if c.get('mean_ab_ag_iptm') is not None]
+        if not known:
+            return list(self.clusters)      # (by size, as they are)
+        most = max(c['size'] for c in self.clusters)
+        return sorted(self.clusters, key=lambda c: -(
+            c['size'] / most * (c.get('mean_ab_ag_iptm') or 0.0)))
+
     def table(self):
+        pair = any(c.get('mean_ab_ag_iptm') is not None
+                   for c in self.clusters)
+        unit = '' if self.measure == 'epitope' else ' A'
+        spread = 'Shared' if self.measure == 'epitope' else 'Mean RMSD'
         width = max([len('Best')] + [len(format_best(c))
                                      for c in self.clusters])
-        lines = [' %-7s %4s  %-9s %-6s  %-*s  %s' % (
-            'Cluster', 'Size', 'Mean RMSD', 'pLDDT', width, 'Best',
+        lines = [' %-7s %4s  %-9s %-6s %s %-*s  %s' % (
+            'Cluster', 'Size', spread, 'pLDDT',
+            'Ab-Ag ipTM ' if pair else '', width, 'Best',
             'Representative')]
         for c in self.clusters:
-            lines.append(' %-7d %4d  %7.2f A  %-6s  %-*s  %s' % (
-                c['cluster'], c['size'], c['mean_rmsd'],
+            value = c.get('mean_ab_ag_iptm')
+            lines.append(' %-7d %4d  %7.2f%-2s %-6s %s%-*s  %s' % (
+                c['cluster'], c['size'],
+                1 - c['mean_rmsd'] if self.measure == 'epitope'
+                else c['mean_rmsd'], unit,
                 '%.1f' % c['score'] if c['score'] is not None else '-',
+                ('%-11s' % ('%.2f' % value if value is not None else '-'))
+                if pair else '',
                 width, format_best(c), c['representative']))
         for c in self.clusters:
             if c['best']:
@@ -535,7 +682,8 @@ def format_value(value):
 
 def compute(objects='', fit='', rmsd='', atoms='ca', cutoff=3.0,
             method='average', state=1, best_by='iptm', scores='',
-            scores_csv='', higher=None, _self=cmd):
+            scores_csv='', higher=None, measure=DEFAULT_MEASURE,
+            _self=cmd):
     '''
     The clustering, without changing the session.
 
@@ -556,6 +704,9 @@ def compute(objects='', fit='', rmsd='', atoms='ca', cutoff=3.0,
     atoms = str(atoms).strip().lower()
     if atoms not in ATOMS:
         raise ValueError('atoms must be one of: ' + ', '.join(ATOMS))
+    measure = str(measure).strip().lower()
+    if measure not in MEASURES:
+        raise ValueError('measure must be one of: ' + ', '.join(MEASURES))
     models = _objects(objects, _self)
     if len(models) < 2:
         raise ValueError('need at least two structures (objects)')
@@ -565,22 +716,47 @@ def compute(objects='', fit='', rmsd='', atoms='ca', cutoff=3.0,
         rmsd = str(rmsd).strip() or auto_rmsd
     state = int(state)
 
-    fit_sel = '(%s) and %s' % (fit, ATOMS[atoms])
-    rmsd_sel = '(%s) and %s' % (rmsd, ATOMS[atoms])
-    fit_sets = [_atoms(m, fit_sel, state, _self) for m in models]
-    rmsd_sets = [_atoms(m, rmsd_sel, state, _self) for m in models]
-    fit_keys = sorted(set.intersection(*(set(a) for a in fit_sets)))
-    rmsd_keys = sorted(set.intersection(*(set(a) for a in rmsd_sets)))
-    if len(fit_keys) < 3:
-        raise ValueError('fewer than 3 atoms in "%s" common to all '
-                         'structures' % fit_sel)
-    if not rmsd_keys:
-        raise ValueError('no atoms in "%s" common to all structures' %
-                         rmsd_sel)
-    fit_xyz = [np.array([a[k] for k in fit_keys]) for a in fit_sets]
-    rmsd_xyz = [np.array([a[k] for k in rmsd_keys]) for a in rmsd_sets]
-    matrix = rmsd_matrix(fit_xyz, rmsd_xyz)
     cutoff = float(cutoff)
+    epitopes = [contact_residues(m, fit, rmsd, state, _self=_self)
+                for m in models]
+    if measure == 'epitope':
+        # where each model binds, not how the antibody is turned
+        empty = [m for m, e in zip(models, epitopes) if not e]
+        if empty:
+            raise ValueError('nothing of "%s" touches "%s" in %s: no '
+                             'epitope to compare' % (rmsd, fit,
+                                                     ', '.join(empty[:3])))
+        matrix = jaccard_matrix(epitopes)
+        fit_keys = rmsd_keys = sorted(set.union(*epitopes))
+    else:
+        if measure == 'interface':
+            # the contacting residues of both sides, in any model: fitted
+            # on and measured, as CAPRI's interface RMSD
+            paratopes = [contact_residues(m, rmsd, fit, state, _self=_self)
+                         for m in models]
+            residues = set.union(*epitopes) | set.union(*paratopes)
+            if not residues:
+                raise ValueError('"%s" and "%s" do not touch in any '
+                                 'structure: no interface to compare'
+                                 % (fit, rmsd))
+            where = _residues_selection(residues)
+            fit_sel = rmsd_sel = '(%s) and %s' % (where, ATOMS[atoms])
+        else:
+            fit_sel = '(%s) and %s' % (fit, ATOMS[atoms])
+            rmsd_sel = '(%s) and %s' % (rmsd, ATOMS[atoms])
+        fit_sets = [_atoms(m, fit_sel, state, _self) for m in models]
+        rmsd_sets = [_atoms(m, rmsd_sel, state, _self) for m in models]
+        fit_keys = sorted(set.intersection(*(set(a) for a in fit_sets)))
+        rmsd_keys = sorted(set.intersection(*(set(a) for a in rmsd_sets)))
+        if len(fit_keys) < 3:
+            raise ValueError('fewer than 3 atoms in "%s" common to all '
+                             'structures' % fit_sel)
+        if not rmsd_keys:
+            raise ValueError('no atoms in "%s" common to all structures' %
+                             rmsd_sel)
+        fit_xyz = [np.array([a[k] for k in fit_keys]) for a in fit_sets]
+        rmsd_xyz = [np.array([a[k] for k in rmsd_keys]) for a in rmsd_sets]
+        matrix = rmsd_matrix(fit_xyz, rmsd_xyz)
     labels = gromos(matrix, cutoff) if method == 'gromos' else \
         hierarchical(matrix, cutoff, method)
 
@@ -593,7 +769,10 @@ def compute(objects='', fit='', rmsd='', atoms='ca', cutoff=3.0,
                             'values.append(b)', space={'values': values})
         mean = sum(values) / len(values) if values else None
         plddt.append(mean if mean is not None and 0 < mean <= 100 else None)
-    confidences = [find_scores(m, scores)[0] for m in models]
+    order = sorted(_self.get_chains(models[0]) or [])
+    antibody_ids = antibody_chains(models[0], _self)
+    confidences = [find_scores(m, scores, order, antibody_ids)[0]
+                   for m in models]
     unmatched = []
     if table:
         matched, unmatched = match_scores(models, table)
@@ -604,6 +783,8 @@ def compute(objects='', fit='', rmsd='', atoms='ca', cutoff=3.0,
     result.unmatched_scores = unmatched
     result.fit, result.rmsd, result.method, result.cutoff = \
         fit, rmsd, method, cutoff
+    result.measure = measure
+    result.epitopes = epitopes
     return result
 
 
@@ -666,7 +847,8 @@ def apply(result, superpose=True, group=True, color=True, prefix='cluster',
 def cluster_rmsd(objects='', fit='', rmsd='', atoms='ca', cutoff=3.0,
                  method='average', superpose=1, group=1, color=1,
                  file='', best_by='iptm', scores='', scores_csv='',
-                 higher='auto', state=1, quiet=0, *, _self=cmd):
+                 higher='auto', state=1, measure=DEFAULT_MEASURE, quiet=0,
+                 *, _self=cmd):
     '''
 DESCRIPTION
 
@@ -691,7 +873,16 @@ ARGUMENTS
 
     atoms = ca, backbone or heavy {default: ca}
 
-    cutoff = float: RMSD, Angstrom {default: 3.0}
+    measure = what the distance between two models is {default: ligand}:
+    ligand (fit the antigen, measure the antibody: CAPRI's ligand RMSD),
+    interface (fit and measure the residues the two sides contact:
+    CAPRI's interface RMSD, which the antibody's distal domains don't
+    sway) or epitope (the antigen residues each model contacts, compared
+    as 1 - their overlap: where it binds, not how it is turned)
+
+    cutoff = float: RMSD in Angstrom, or for measure=epitope a fraction
+    of the contacted residues not shared, 0 to 1 {default: 3.0, and 0.5
+    for epitope}
 
     method = average, complete, single (hierarchical) or gromos
     {default: average}
@@ -706,9 +897,12 @@ ARGUMENTS
 
     file = str: also save the clusters and the RMSD matrix as CSV
 
-    best_by = iptm, ptm, ranking or plddt: the score that picks each
-    cluster's best model (from the predictor's JSON next to the model
-    file; pLDDT from the B-factors) {default: iptm}
+    best_by = ab_ag_iptm, iptm, ptm, ranking, plddt or ab_ag_pae: the
+    score that picks each cluster's best model (from the predictor's
+    JSON next to the model file; pLDDT from the B-factors). ab_ag_iptm
+    is AlphaFold 3's ipTM for the antibody-antigen chain pair, which is
+    what its own documentation suggests for such an interface, rather
+    than the whole complex's {default: iptm}
 
     scores = str: folder to search for score files by object name, for
     models whose files pymolx doesn't know {default: none}
@@ -733,18 +927,31 @@ SEE ALSO
     higher = str(higher).strip().lower()
     higher = None if higher in ('auto', '', '-1') else \
         higher not in ('0', 'no', 'false', 'off')
+    measure = str(measure).strip().lower()
+    if measure == 'epitope' and float(cutoff) == 3.0:
+        cutoff = EPITOPE_CUTOFF     # (a fraction, not an Angstrom)
     result = compute(objects, fit, rmsd, atoms, cutoff, method, state,
-                     best_by, scores, scores_csv, higher, _self=_self)
+                     best_by, scores, scores_csv, higher, measure,
+                     _self=_self)
     apply(result, int(superpose), int(group), int(color), state=int(state),
           _self=_self)
     if file:
         result.save_csv(_self.exp_path(file))
     if not int(quiet):
-        print(' cluster_rmsd: %d structures, %d clusters (%s, cutoff %.1f A);'
-              ' fit on %s (%d atoms), RMSD of %s (%d atoms)' % (
-                  len(result.models), len(result.clusters), result.method,
-                  result.cutoff, result.fit, result.fit_atoms, result.rmsd,
-                  result.rmsd_atoms))
+        if result.measure == 'epitope':
+            print(' cluster_rmsd: %d structures, %d clusters (%s, cutoff '
+                  '%.2f of the epitope not shared); the residues of %s '
+                  'that %s touches' % (
+                      len(result.models), len(result.clusters),
+                      result.method, result.cutoff, result.fit,
+                      result.rmsd))
+        else:
+            print(' cluster_rmsd: %d structures, %d clusters (%s, cutoff '
+                  '%.1f A); %s, fit on %d atoms, RMSD of %d' % (
+                      len(result.models), len(result.clusters),
+                      result.method, result.cutoff,
+                      MEASURES[result.measure].split(':')[0],
+                      result.fit_atoms, result.rmsd_atoms))
         print(result.table())
         if result.unmatched_scores:
             print(' cluster_rmsd: scores without a matching model: %s' %
