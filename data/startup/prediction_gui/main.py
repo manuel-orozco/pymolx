@@ -451,10 +451,16 @@ class PredictionDialog(QtWidgets.QDialog):
         self.method.currentIndexChanged.connect(self.refresh)
         grid.addWidget(QtWidgets.QLabel('Method', box), 1, 0)
         grid.addWidget(self.method, 1, 1)
-        self.seeds = QtWidgets.QLineEdit('1', box)
-        self.seeds.setToolTip('Model seeds, separated by commas (one '
-                              'prediction each)')
-        self.seeds.textChanged.connect(self.refresh)
+        self.seeds = QtWidgets.QSpinBox(box)
+        self.seeds.setObjectName('prediction_seeds')
+        self.seeds.setRange(1, prediction.MAX_SEEDS)
+        self.seeds.setValue(prediction.DEFAULT_SEEDS)
+        self.seeds.setToolTip(
+            'One prediction per seed, numbered from 1. AlphaFold 3\'s '
+            'paper calls five the typical number; Epitope Prediction '
+            'asks for many more, which an antibody-antigen interface '
+            'needs')
+        self.seeds.valueChanged.connect(self.refresh)
         self.seed_label = QtWidgets.QLabel('Seeds', box)
         grid.addWidget(self.seed_label, 2, 0)
         grid.addWidget(self.seeds, 2, 1)
@@ -710,9 +716,7 @@ class PredictionDialog(QtWidgets.QDialog):
     # the file
 
     def _seeds(self):
-        text = self.seeds.text().replace(',', ' ').split()
-        found = [int(one) for one in text if one.lstrip('-').isdigit()]
-        return found or [1]
+        return list(range(1, self.seeds.value() + 1))
 
     # running it
 

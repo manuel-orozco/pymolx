@@ -460,6 +460,12 @@ def esmfold2(job):
 WRITERS = {'af3': alphafold3, 'rf3': rosettafold3, 'esmfold2': esmfold2}
 
 # running a prediction: the job script takes the input file's name
+# seeds: one prediction each. AlphaFold 3's paper calls five "the
+# typical" number; pymolx.epitope asks for many more, because an
+# antibody-antigen interface needs them
+DEFAULT_SEEDS = 1
+MAX_SEEDS = 200
+
 SUBMIT_MODES = (('Single run (this machine)', 'single'),
                 ('Slurm (sbatch)', 'slurm'))
 INPUT_MOUNT = '/root/af_input_output'    # AlphaFold 3's input/output folder

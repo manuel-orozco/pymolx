@@ -544,6 +544,18 @@ def test_dialog(fresh, fasta):
             found['bondedAtomPairs']
         dialog.method.setCurrentIndex(dialog.method.findData('rf3'))
         assert not dialog.seeds.isEnabled()       # seeds are AlphaFold's
+        dialog.method.setCurrentIndex(dialog.method.findData('af3'))
+        # the seed count, as Epitope Prediction asks for it
+        assert dialog.seeds.value() == prediction.DEFAULT_SEEDS == 1
+        assert dialog._seeds() == [1]
+        dialog.seeds.setValue(7)
+        assert dialog._seeds() == [1, 2, 3, 4, 5, 6, 7]
+        apart = prediction.job_from_text('>Chain A\nACDEFGHIK\n')
+        apart.seeds = dialog._seeds()
+        assert json.loads(prediction.write(apart, 'af3'))[
+            'modelSeeds'] == list(range(1, 8))
+        assert dialog.seeds.maximum() == prediction.MAX_SEEDS
+        dialog.seeds.setValue(1)
         dialog.method.setCurrentIndex(dialog.method.findData('esmfold2'))
         assert 'SDK' in dialog.status.text()
         # the table removes what it names
