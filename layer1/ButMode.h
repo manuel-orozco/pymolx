@@ -98,7 +98,12 @@ Z* -------------------------------------------------------------------
 #define cButModeMovL 55
 #define cButModeMvzL 56
 
-#define cButModeCount       57
+/* pymolx: a click adds to or takes from the selection, where PyMOL's
+   own cButModeSeleToggle flips it either way (the toolbar's + and -) */
+#define cButModeSeleAdd  57
+#define cButModeSeleSub  58
+
+#define cButModeCount       59
 
 
 /* remainder only used in scene... */

@@ -1,8 +1,12 @@
 '''
 Paratope Prediction dialog: an antibody's binding residues predicted by
-Parapred (from the sequence) or Paragraph (from the structure), as a
-table, a selection and colour on the model (pymolx.paratope)
+Parapred (from the sequence), Paragraph or ParaSurf (from the
+structure), as a table, a selection and colour on the model
+(pymolx.paratope)
 '''
+
+import shutil
+import traceback
 
 from pymol import cmd
 from pymol.Qt import QtCore, QtWidgets
@@ -15,6 +19,41 @@ _dialog = None
 
 COLUMNS = ['Chain', 'Residue', 'Score', 'Binds', 'Region']
 
+ABOUT = {
+    'parapred': 'Parapred (Liberis et al. 2018, the PyTorch port): a '
+                'network over each CDR with two residues either side, '
+                'from the sequence alone.',
+    'paragraph': 'Paragraph (Chinery et al. 2023): a graph network over '
+                 'the Fv\'s structure. The chains are IMGT numbered '
+                 'with ANARCI first.',
+    'parasurf': 'ParaSurf (Papadopoulos et al. 2025): a network over the '
+                'Fv\'s molecular surface, which scores every residue. '
+                'It takes minutes without a GPU.',
+}
+
+
+class ParaSurfThread(QtCore.QThread):
+    '''
+    Runs ParaSurf off the GUI thread. It reads the PDB files written
+    beforehand and makes no PyMOL calls (pymolx.paratope).
+    '''
+
+    def __init__(self, folder, jobs, mesh, parent=None):
+        super().__init__(parent)
+        self.folder = folder
+        self.jobs = jobs
+        self.mesh = mesh
+        self.rows = []
+        self.error = None
+
+    def run(self):
+        try:
+            self.rows = paratope.parasurf_scores(self.folder, self.jobs,
+                                                 self.mesh)
+        except Exception as e:          # reported in the dialog
+            self.error = e
+            traceback.print_exc()
+
 
 class ParatopeDialog(QtWidgets.QDialog):
 
@@ -22,6 +61,9 @@ class ParatopeDialog(QtWidgets.QDialog):
         super().__init__(parent)
         self.cmd = _self
         self.residues = []
+        self.thread = None          # ParaSurf runs off the GUI thread
+        self.mapping = {}
+        self.running_object = ''
         self.setObjectName('paratope_dialog')
         self.setWindowTitle('Paratope Prediction')
         self.resize(900, 620)
@@ -86,6 +128,21 @@ class ParatopeDialog(QtWidgets.QDialog):
         row.addWidget(self.threshold)
         row.addStretch(1)
         column.addLayout(row)
+        self.mesh_row = QtWidgets.QWidget(box)
+        mesh = QtWidgets.QHBoxLayout(self.mesh_row)
+        mesh.setContentsMargins(0, 0, 0, 0)
+        mesh.addWidget(QtWidgets.QLabel('Surface detail', self.mesh_row))
+        self.mesh = QtWidgets.QDoubleSpinBox(self.mesh_row)
+        self.mesh.setObjectName('paratope_mesh')
+        self.mesh.setRange(0.1, 1.0)
+        self.mesh.setSingleStep(0.1)
+        self.mesh.setDecimals(1)
+        self.mesh.setValue(paratope.PARASURF_MESH)
+        self.mesh.setToolTip('Points per square angstrom of surface: '
+                             '0.1 is the quickest, 1.0 the finest')
+        mesh.addWidget(self.mesh)
+        mesh.addStretch(1)
+        column.addWidget(self.mesh_row)
         self.colour = QtWidgets.QCheckBox('Colour the model and set the '
                                           'B-factors', box)
         self.colour.setChecked(True)
@@ -154,27 +211,25 @@ class ParatopeDialog(QtWidgets.QDialog):
     def _method_changed(self, *_):
         method = self.method.currentData()
         missing = paratope.available(method)
-        if method == 'paragraph':
-            self.about.setText(
-                'Paragraph (Chinery et al. 2023): a graph network over '
-                'the Fv\'s structure. The chains are IMGT numbered with '
-                'ANARCI first.')
-        else:
-            self.about.setText(
-                'Parapred (Liberis et al. 2018, the PyTorch port): a '
-                'network over each CDR with two residues either side, '
-                'from the sequence alone.')
+        self.about.setText(ABOUT.get(method, ''))
+        self.mesh_row.setVisible(method == 'parasurf')
         structure = self.source.checkedId() == 0
-        trouble = missing or ('' if structure else
-                              'Paragraph needs a structure'
-                              if method == 'paragraph' else '')
-        self.run_button.setEnabled(not trouble)
+        needs = '%s needs a structure' % paratope.method_label(
+            method).split(' (')[0]
+        trouble = missing or (
+            '' if structure or method not in paratope.STRUCTURE_METHODS
+            else needs)
+        self.run_button.setEnabled(not trouble and not self._running())
         if trouble:
             self.status.setText(trouble)
-        elif self.status.text().startswith(('Paragraph needs', 'PyTorch',
-                                            'Parapred', 'ANARCI',
-                                            'HMMER')):
+        elif self.status.text().startswith(('Paragraph needs',
+                                            'ParaSurf needs', 'PyTorch',
+                                            'Parapred', 'ANARCI', 'DMS',
+                                            'Open Babel', 'HMMER')):
             self.status.setText('')
+
+    def _running(self):
+        return self.thread is not None and self.thread.isRunning()
 
     def showEvent(self, event):
         self.refresh()
@@ -184,6 +239,11 @@ class ParatopeDialog(QtWidgets.QDialog):
 
     def run(self):
         method = self.method.currentData()
+        if self._running():
+            return
+        if method == 'parasurf' and self.source.checkedId() == 0:
+            self.run_parasurf()
+            return
         self.status.setText('Predicting...')
         QtWidgets.QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
@@ -216,6 +276,55 @@ class ParatopeDialog(QtWidgets.QDialog):
             QtWidgets.QApplication.restoreOverrideCursor()
         self._fill_table()
 
+    def run_parasurf(self):
+        """
+        ParaSurf takes minutes: the Fvs are written here (PyMOL calls),
+        the surface and the network run in the worker thread, and the
+        scores land on the structure when it finishes
+        """
+        name = self.object.currentText()
+        if not name:
+            self.status.setText('Open a structure')
+            return
+        try:
+            folder, jobs, self.mapping = paratope.parasurf_inputs(
+                name, (), 1, self.cmd)
+        except Exception as e:
+            self.status.setText(str(e))
+            return
+        if not jobs:
+            shutil.rmtree(folder, ignore_errors=True)
+            self.status.setText('No antibody variable domain found')
+            return
+        self.running_object = name
+        self.run_button.setEnabled(False)
+        self.status.setText(
+            'ParaSurf: computing the surface of %d Fv(s) and scoring '
+            'it... minutes, unless there is a GPU' % len(jobs))
+        self.thread = ParaSurfThread(folder, jobs, self.mesh.value())
+        self.thread.finished.connect(self._parasurf_done)
+        self.thread.start()
+
+    def _parasurf_done(self):
+        thread, self.thread = self.thread, None
+        shutil.rmtree(thread.folder, ignore_errors=True)
+        self.run_button.setEnabled(True)
+        if thread.error is not None:
+            self.residues = []
+            self.table.setRowCount(0)
+            self.status.setText(str(thread.error))
+            return
+        self.residues = paratope.parasurf_residues(thread.rows,
+                                                   self.mapping)
+        if not self.residues:
+            self.status.setText('No antibody variable domain found')
+            return
+        if self.colour.isChecked() or self.select.isChecked():
+            paratope.apply_scores(
+                self.running_object, self.residues, self.colour.isChecked(),
+                self.select.isChecked(), self.colour.isChecked(), self.cmd)
+        self._fill_table()
+
     def _fill_table(self, *_):
         threshold = self.threshold.value()
         rows = sorted(self.residues, key=lambda r: -r.score)
@@ -231,11 +340,14 @@ class ParatopeDialog(QtWidgets.QDialog):
         self.table.resizeColumnsToContents()
         if self.residues:
             binders = sum(1 for x in self.residues if x.score >= threshold)
+            method = self.method.currentData()
+            note = ('' if method == 'parasurf' else
+                    ' A residue with no score is one the predictor did '
+                    'not look at.')
             self.status.setText(
-                '%s: %d residue(s) scored, %d at or above %.2f. A residue '
-                'with no score is one the predictor did not look at.'
-                % (paratope.method_label(self.method.currentData()),
-                   len(self.residues), binders, threshold))
+                '%s: %d residue(s) scored, %d at or above %.2f.%s'
+                % (paratope.method_label(method), len(self.residues),
+                   binders, threshold, note))
 
     def copy(self):
         lines = ['\t'.join(COLUMNS)]

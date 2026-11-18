@@ -90,6 +90,42 @@ static void SceneLoopRelease(Block* block, int button, int x, int y, int mod)
   OrthoDirty(G);
 }
 
+/* pymolx: a click that only adds to the selection, or only takes from
+   it, for the toolbar's + and - buttons. PyMOL's own "+/-" flips what
+   was clicked either way, which can't express "keep adding". */
+void SceneClickButtonAddOrSub(PyMOLGlobals* G, pymol::CObject* obj,
+    pymol::zstring_view selName, pymol::zstring_view buffer,
+    pymol::zstring_view sel_mode_kw, bool add)
+{
+  CScene* I = G->Scene;
+  std::string buf2;
+  if (SelectorIndexByName(G, selName.c_str()) >= 0) {
+    buf2 = add ? pymol::string_format("((%s) or %s(%s))", selName,
+                     sel_mode_kw, buffer)
+               : pymol::string_format("((%s) and not %s(%s))", selName,
+                     sel_mode_kw, buffer);
+  } else if (add) {
+    buf2 = pymol::string_format("%s(%s)", sel_mode_kw, buffer);
+  } else {
+    return;                     /* nothing selected to take from */
+  }
+  SelectorCreate(G, selName.c_str(), buf2.c_str(), nullptr, false, nullptr);
+  if (obj->type == cObjectMolecule &&
+      SettingGetGlobal_i(G, cSetting_logging)) {
+    auto objMol = (ObjectMolecule*) obj;
+    auto atomSele = ObjectMoleculeGetAtomSeleLog(
+        objMol, I->LastPicked.src.index, false);
+    auto select =
+        add ? pymol::string_format("((%s) or %s(%s))", selName, sel_mode_kw,
+                  atomSele)
+            : pymol::string_format("((%s) and not %s(%s))", selName,
+                  sel_mode_kw, atomSele);
+    auto pLogBuffer = pymol::string_format(
+        "cmd.select('%s',\"%s\",enable=1)", selName, select);
+    PLog(G, pLogBuffer, cPLog_pym);
+  }
+}
+
 void SceneClickButtonAddTo(PyMOLGlobals* G, pymol::CObject* obj,
     pymol::zstring_view selName, pymol::zstring_view buffer,
     pymol::zstring_view sel_mode_kw)
@@ -258,6 +294,9 @@ void SceneClickObject(PyMOLGlobals* G, pymol::CObject* obj, const NamedPicking& 
       break;
     case cButModeSeleSet:
     case cButModeSeleToggle:
+    /* pymolx: add to / take from that same selection */
+    case cButModeSeleAdd:
+    case cButModeSeleSub:
       ExecutiveGetActiveSeleName(
           G, selName, true, SettingGet<int>(G, cSetting_logging));
       break;
@@ -361,6 +400,13 @@ void SceneClickObject(PyMOLGlobals* G, pymol::CObject* obj, const NamedPicking& 
     case cButModeAddToRB:
     case cButModeSeleToggle:
       SceneClickButtonAddTo(G, obj, selName, buffer.c_str(), sel_mode_kw);
+      break;
+    /* pymolx: add to or take from the selection, rather than flipping
+       what was clicked either way */
+    case cButModeSeleAdd:
+    case cButModeSeleSub:
+      SceneClickButtonAddOrSub(G, obj, selName, buffer.c_str(), sel_mode_kw,
+                               mode == cButModeSeleAdd);
       break;
     }
   }
@@ -1019,6 +1065,9 @@ void SceneClick(Block* block, int button, int x, int y, int mod, double when)
 
     case cButModeSeleSet:
     case cButModeSeleToggle:
+    /* pymolx: these two pick like the ones above */
+    case cButModeSeleAdd:
+    case cButModeSeleSub:
       sel_mode_kw = SceneGetSeleModeKeyword(G);
 
       /* intentional pass through */

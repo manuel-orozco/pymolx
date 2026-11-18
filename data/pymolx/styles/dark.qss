@@ -140,7 +140,7 @@ QToolBar#pymolx_toolbar QToolButton
     background:     transparent;
     border:         none;
     border-radius:  0px;
-    padding:        0px 10px;
+    padding:        0px 8px;
     min-height:     33px;
     font-size:      $font_size;
 }
@@ -150,16 +150,63 @@ QToolBar#pymolx_toolbar QToolButton:hover
     background:     $hover;
 }
 
-QToolBar#pymolx_toolbar QToolButton:pressed,
-QToolBar#pymolx_toolbar QToolButton:checked
+QToolBar#pymolx_toolbar QToolButton:pressed
 {
     background:     $base;
     color:          $accent_text;
 }
 
+/* a pressed-in tool (the selecting arrow, + and -) */
+
+QToolBar#pymolx_toolbar QToolButton:checked
+{
+    background:     $active;
+    color:          $text_bright;
+}
+
 QToolBar#pymolx_toolbar QToolButton[accent=true]
 {
     color:          $accent_text;
+}
+
+/* the selecting tool: an arrow, then + over - as one segmented control */
+
+QToolBar#pymolx_toolbar QToolButton[caption=true]
+{
+    padding:        0px 4px;
+}
+
+QToolBar#pymolx_toolbar QToolButton[small=true]
+{
+    padding:        0px;
+    min-height:     0px;
+    min-width:      24px;
+    max-width:      24px;
+    border:         1px solid $border;
+    background:     $panel;
+    color:          $text;
+    font-size:      14px;       /* the + and - signs, like the ... button */
+}
+
+QToolBar#pymolx_toolbar QToolButton#select_add
+{
+    border-bottom:  none;           /* one line between the two */
+}
+
+QToolBar#pymolx_toolbar QToolButton[small=true]:hover
+{
+    background:     $hover;
+}
+
+QToolBar#pymolx_toolbar QToolButton[small=true]:checked
+{
+    background:     $accent;
+    color:          $base;
+}
+
+QToolBar#pymolx_toolbar QToolButton[small=true]:disabled
+{
+    color:          $text_dim;
 }
 
 /* dropdown (InstantPopup) and split (MenuButtonPopup) buttons */

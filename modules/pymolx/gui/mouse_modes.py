@@ -33,6 +33,8 @@ ACTION_LABELS = {
     43: 'MvAZ', 44: 'DrgM', 45: 'RotV', 46: 'MovV', 47: 'MvVZ', 49: 'DrgO',
     50: 'IMSZ', 51: 'IMvZ', 52: 'Box', 53: 'IRtZ', 54: 'RotL', 55: 'MovL',
     56: 'MvzL',
+    # pymolx: add to / take from the selection
+    57: 'Add', 58: 'Sub',
 }
 
 COLUMNS = [('L', 'l'), ('M', 'm'), ('R', 'r'), ('Wheel', 'w')]

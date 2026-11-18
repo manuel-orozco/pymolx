@@ -188,58 +188,173 @@ def test_colored_labels_are_drawn(app):
 # toolbar
 
 def test_toolbar_buttons(window):
+    # select tool, selection level | undo redo | zoom all, zoom selection
+    # | presets ... (the drawn buttons paint their own label, so no text)
+    bar = window.toolbar
     assert [b.text() for b in toolbar_buttons(window)] == [
-        'Residues', '', '', 'Zoom', 'Orient', 'Rock', 'Presets...',
-        'Builder...', 'Scenes', 'Draw/Ray', '•••']
+        '', '', '', '', '', '', '',
+        'Builder...', 'Scenes', 'Draw/Ray', '\u2022\u2022\u2022']
+    assert toolbar_buttons(window)[:7] == [
+        bar.select_button, bar.selection_mode_button,
+        bar.undo_button, bar.redo_button,
+        bar.zoom_all_button, bar.zoom_selection_button, bar.presets_button]
+    assert bar.selection_mode_button.letter == 'R'
+    # + and - sit between the arrow and the level, stacked in a column
+    column = bar.add_button_plus.parent()
+    assert column is bar.add_button_minus.parent()
+    assert (bar.add_button_plus.text(), bar.add_button_minus.text()) == \
+        ('+', '\u2212')
+    # every button in the left half is an icon (or the level's letter)
+    # over a caption, so each one fills the bar's height
+    assert [b.caption for b in toolbar_buttons(window)[:7]] == [
+        'SELECT', 'RESIDUES', 'UNDO', 'REDO', 'ZOOM ALL', 'ZOOM SEL',
+        'PRESETS']
+    for btn in toolbar_buttons(window)[:7]:
+        assert btn.sizeHint().height() == bar.presets_button.sizeHint().height()
+        assert not btn.grab().isNull()      # they paint
 
 
 def test_selection_mode(window):
+    # the level's letter with its name underneath, as Maestro shows it
     btn = window.toolbar.selection_mode_button
-    assert btn.text() == 'Residues'
+    assert (btn.letter, btn.caption) == ('R', 'RESIDUES')
 
-    actions(btn.menu())['Chains'].trigger()
+    actions(btn.menu())['Chains  (C)'].trigger()
     assert cmd.get_setting_int('mouse_selection_mode') == 2
     window.fire_setting_callbacks()
-    assert btn.text() == 'Chains'
+    assert (btn.letter, btn.caption) == ('C', 'CHAINS')
 
     # changes from elsewhere update the button
     cmd.set('mouse_selection_mode', 4)
     window.fire_setting_callbacks()
-    assert btn.text() == 'Objects'
-    assert actions(btn.menu())['Objects'].isChecked()
+    assert (btn.letter, btn.caption) == ('O', 'OBJECTS')
+    assert actions(btn.menu())['Objects  (O)'].isChecked()
+
+    # every level PyMOL has, each with its own letter
+    from pymolx.gui import toolbar
+    labels = [a.text() for a in btn.menu().actions()]
+    assert len(labels) == len(toolbar.SELECTION_MODES) == 7
+    letters = [letter for _, _, letter in toolbar.SELECTION_MODES]
+    assert letters == ['A', 'R', 'C', 'S', 'O', 'M', 'CA']
+    assert len(set(letters)) == len(letters)
+    for label, value, letter in toolbar.SELECTION_MODES:
+        cmd.set('mouse_selection_mode', value)
+        window.fire_setting_callbacks()
+        assert (btn.letter, btn.caption) == (letter, label.upper())
+    # it is wide enough for the longest of them
+    cmd.set('mouse_selection_mode', 1)
+    window.fire_setting_callbacks()
+    assert btn.sizeHint().width() >= 40
+    assert btn.sizeHint().height() > btn.fontMetrics().height()
+    assert not btn.grab().isNull()      # it paints
 
 
-def test_rock(window):
-    btn = window.toolbar.rock_button
-    assert not btn.isChecked()
+def test_select_tool(window):
+    from pymolx import picking
+    bar = window.toolbar
+    # the arrow is on and nothing else: a click replaces the selection
+    assert bar.select_button.isChecked()
+    assert picking.click_action() == 'replace'
 
-    btn.click()
+    bar.add_button_plus.setChecked(True)
+    assert picking.click_action() == 'add'
+    # + and - are alternatives
+    bar.add_button_minus.setChecked(True)
+    assert not bar.add_button_plus.isChecked()
+    assert picking.click_action() == 'subtract'
+    bar.add_button_minus.setChecked(False)
+    assert picking.click_action() == 'replace'
+
+    # with the arrow off, clicks leave the selection alone and + and -
+    # can't be pressed
+    bar.add_button_plus.setChecked(True)
+    bar.select_button.setChecked(False)
+    assert picking.click_action() == 'off'
+    assert not bar.add_button_plus.isEnabled()
+    assert not bar.add_button_minus.isEnabled()
+    bar.select_button.setChecked(True)
+    assert bar.add_button_plus.isEnabled()
+    assert picking.click_action() == 'add'
+    bar.add_button_plus.setChecked(False)
+
+
+
+def test_select_tool_survives_a_mouse_mode_change(window):
+    # cmd.mouse rebinds every button, "+/-" included, so the toolbar
+    # binds its own choice again when button_mode_name changes
+    from pymolx import picking
+    bar = window.toolbar
+    bar.add_button_plus.setChecked(True)
+    assert picking.click_action() == 'add'
+
+    cmd.mouse('three_button_editing')
+    window.fire_setting_callbacks()
+    assert picking.click_action() == 'add'
+    assert bar.add_button_plus.isChecked()
+    bar.add_button_plus.setChecked(False)
+    cmd.mouse('three_button_viewing')
+
+def test_rock_in_the_more_menu(window):
+    menu = buttons(window)['\u2022\u2022\u2022'].menu()
+    action = actions(menu)['Rock']
+    menu.aboutToShow.emit()
+    assert not action.isChecked()
+
+    action.trigger()
     assert cmd.get('rock') == 'on'
-    btn.click()
+    action.trigger()
     assert cmd.get('rock') == 'off'
 
+    # rocking started elsewhere shows up when the menu opens
     cmd.rock(1)
-    window.fire_setting_callbacks()
-    assert btn.isChecked()
+    menu.aboutToShow.emit()
+    assert action.isChecked()
 
 
 def test_presets(window):
+    # an icon with its name underneath, like the selection mode's letter
+    btn = window.toolbar.presets_button
+    assert btn.caption == 'PRESETS'
+    assert btn.glyph is not None and not btn.glyph.isNull()
+    assert not btn.letter and not btn.text()
+    # the two drawn buttons are the same height, so the toolbar lines up
+    assert btn.sizeHint().height() == \
+        window.toolbar.selection_mode_button.sizeHint().height()
+    assert not btn.grab().isNull()
+
     cmd.fragment('ala')
     cmd.hide('everything')
-    menu = buttons(window)['Presets...'].menu()
+    menu = btn.menu()
     menu.aboutToShow.emit()
+    # the presets PyMOL offers are all there
+    labels = [a.text() for a in menu.actions() if a.text()]
+    for one in ('simple', 'technical', 'ligands', 'pretty',
+                'publication', 'ball and stick', 'default'):
+        assert one in labels
     actions(menu)['ball and stick'].trigger()
     assert cmd.count_atoms('rep spheres') > 0
 
 
-def test_zoom_menu(window):
-    menu = buttons(window)['Zoom'].menu()
-    menu.aboutToShow.emit()
-    assert not actions(menu)['Selection'].isEnabled()
+def test_zoom_buttons(window):
+    bar = window.toolbar
     cmd.fragment('ala')
+    cmd.zoom('none')
+    before = cmd.get_view()
+    bar.zoom_all_button.click()
+    assert cmd.get_view() != before
+
+    # zooming on the selection needs one
+    bar.zoom_timer.timeout.emit()
+    assert not bar.zoom_selection_button.isEnabled()
     cmd.select('sele', 'name CA')
-    menu.aboutToShow.emit()
-    assert actions(menu)['Selection'].isEnabled()
+    bar.zoom_timer.timeout.emit()
+    assert bar.zoom_selection_button.isEnabled()
+    before = cmd.get_view()
+    bar.zoom_selection_button.click()
+    assert cmd.get_view() != before
+    cmd.delete('sele')
+    bar.zoom_timer.timeout.emit()
+    assert not bar.zoom_selection_button.isEnabled()
 
 
 def test_window_actions(window):
@@ -278,7 +393,8 @@ def test_one_text_size_no_bold(app):
     from pymol import cmd
     qss = theme.stylesheet(cmd)
     sizes = set(re.findall(r'font-size:\s*([^;]+);', qss))
-    assert sizes == {'%dpt' % theme.FONT_SIZE, '8px', '15px'}  # 2 symbols
+    # symbols, not text: the entry dot, "...", the selecting tool's + and -
+    assert sizes == {'%dpt' % theme.FONT_SIZE, '8px', '15px', '14px'}
     bold = [m.group(1).strip().split('\n')[-1] for m in re.finditer(
         r'([^{}]*)\{[^}]*font-weight:\s*bold', qss)]
     # titles: the wizard's, Structure Preparation's workflow steps

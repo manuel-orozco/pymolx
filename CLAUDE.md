@@ -20,6 +20,17 @@ used in code and commits: [INCENTIVE_PARITY.md](INCENTIVE_PARITY.md).
   parapred-pytorch and Paragraph (paratope prediction, both installed
   from GitHub; parapred's wheel leaves out its weights, which were
   fetched into its package's weights/ folder by hand).
+- ParaSurf (the third paratope predictor) is not a package: it is
+  cloned at `../ParaSurf` (found by `paratope.parasurf_home`, or
+  `$PARASURF_HOME`), with its three Paragraph-expanded `.pth` weight
+  files downloaded into `../ParaSurf/weights`. It also needs
+  openbabel-wheel, torchsummary, scikit-learn, jsonpickle, matplotlib
+  and h5py (installed), and the DMS surface program, built from
+  `../ParaSurf/dms` into the environment with
+  `make LIBDIR=../pymolx-env/lib BINDIR=../pymolx-env/bin
+  MANDIR=../pymolx-env/share/man/man1 install` (no sudo; the shipped
+  binary wants /usr/local/lib/dms). On this CPU-only torch a scoring
+  run is minutes; with CUDA torch it would be seconds.
 
 ## Tests
 
@@ -72,8 +83,9 @@ used in code and commits: [INCENTIVE_PARITY.md](INCENTIVE_PARITY.md).
   `_settings_box`),
   `cdr_gui` (CDR loops of an antibody under IMGT/Kabat/Chothia/Martin/AHo
   numbering, from a structure or a sequence, `pymolx.cdr`),
-  `paratope_gui` (binding residues by Parapred or Paragraph,
-  `pymolx.paratope`).
+  `paratope_gui` (binding residues by Parapred, Paragraph or ParaSurf,
+  `pymolx.paratope`; ParaSurf runs in a worker QThread and PyMOL is
+  only called before and after it).
 - Theme: colors only in `COLORS` (`modules/pymolx/gui/theme.py`), used as
   `$name` in `data/pymolx/styles/dark.qss` (literal `$` must be `$$`).
   Icons: `data/pymolx/icons/*.svg` (own artwork; `<name>-on.svg` = checked).
@@ -162,6 +174,14 @@ used in code and commits: [INCENTIVE_PARITY.md](INCENTIVE_PARITY.md).
   (`pymolwidget.before_draw` hooks), else Qt may show it when another
   widget repaints (red flashes). Inside `with widget:` all the same:
   PyMOL draws nothing without its valid-context flag, even in paintGL.
+- A new mouse button action (`layer1/ButMode.h`, `but_act_code` in
+  `modules/pymol/controlling.py`) has to be handled in three places in
+  `layer1/SceneMouse.cpp`: the switch that fills `selName`
+  (`ExecutiveGetActiveSeleName`), the switch that acts on the click, and
+  the `sel_mode_kw` branch of `SceneClick`. Miss one and the click binds
+  but does nothing. In a GUI script, a click's effect shows up a step
+  later (the pick happens in the next draw), and `cmd.mouse` into an
+  editing mode deselects.
 - PyMOL orders a chain's atoms by `segi` first: different segments
   within a chain scramble its residue order (and exports of it). Tag
   residues with the `custom` atom property instead (selectable:

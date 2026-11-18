@@ -22,6 +22,7 @@ COLORS = {
     'accent': '#9b81fd',      # selection mode, prompt, active toggles
     'accent_text': '#9b81fd',
     'selection': '#4b3d7a',   # selected text and menu items
+    'active': '#3b3356',      # a pressed-in toolbar tool
     'enabled': '#33ff33',     # enabled entry dot
     'button': '#575757',      # A/S/H/L/C buttons of enabled entries
     # A/S/H/L/C buttons of the "All" row

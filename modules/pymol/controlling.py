@@ -89,6 +89,9 @@ if True:
 
         'sele' : 30 ,
         '+/-'  : 31 ,
+        # pymolx: add to / take from the selection (the toolbar's + and -)
+        'adds' : 57 ,
+        'subs' : 58 ,
         '+box' : 32 ,
         '-box' : 33 ,
 

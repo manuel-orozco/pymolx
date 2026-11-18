@@ -8,15 +8,22 @@ bind its antigen, from two published predictors.
 - Paragraph (Chinery et al. 2023, OPIG): an equivariant graph network
   over the structure's Fv. Needs a structure, IMGT numbered, which is
   done here with ANARCI (pymolx.cdr) so any numbering can be given.
+- ParaSurf (Papadopoulos et al. 2025): a 3D convolutional network with
+  transformer blocks over the molecular surface of the Fv, which DMS
+  computes and pdb2pqr gives force field features for. Needs a
+  structure and the cloned repository with its weights (see
+  parasurf_home), and takes minutes on a CPU.
 
-Both score every residue they look at from 0 to 1. Neither scores the
-whole chain: Parapred sees the extended CDRs, Paragraph the CDR vicinity,
-so a residue without a score is one the predictor did not consider, which
-is not the same as one it judged not to bind.
+All three score residues from 0 to 1. Parapred sees the extended CDRs
+and Paragraph the CDR vicinity, so a residue without a score is one the
+predictor did not consider, which is not the same as one it judged not
+to bind; ParaSurf scores every residue of the Fv.
 '''
 import csv
 import os
 import re
+import shutil
+import sys
 import tempfile
 
 from pymol import cmd
@@ -24,8 +31,11 @@ from pymol import cmd
 from . import cdr
 
 METHODS = (('Parapred (sequence)', 'parapred'),
-           ('Paragraph (structure)', 'paragraph'))
+           ('Paragraph (structure)', 'paragraph'),
+           ('ParaSurf (structure)', 'parasurf'))
 DEFAULT_METHOD = 'parapred'
+# the methods that read a structure rather than a sequence
+STRUCTURE_METHODS = ('paragraph', 'parasurf')
 # Parapred reads each CDR with this many residues either side
 FLANK = 2
 # the longest input its encoder takes
@@ -34,6 +44,16 @@ MAX_LENGTH = 40
 THRESHOLD = 0.67
 PARATOPE_COLOR = 'red'
 REST_COLOR = 'grey70'
+# ParaSurf: points per square angstrom of surface DMS computes. Its own
+# default; 0.1 is three times faster and a little coarser
+PARASURF_MESH = 0.3
+# its weights, by the kind of Fv they were trained on
+PARASURF_WEIGHTS = (('paired', 'entire'), ('heavy', 'heavy'),
+                    ('light', 'light'))
+# its network, as blind_predict.py configures it
+PARASURF_GRID = 41
+PARASURF_CHANNELS = 22
+PARASURF_BATCH = 64
 
 
 def method_label(method):
@@ -68,9 +88,99 @@ def available(method=DEFAULT_METHOD):
         except ImportError:
             return ('Paragraph is not installed: "pip install '
                     'git+https://github.com/oxpig/Paragraph"')
+    elif method == 'parasurf':
+        return _parasurf_missing()
     else:
         return 'method: one of %s' % ', '.join(v for _, v in METHODS)
     return ''
+
+
+def _parasurf_missing():
+    '''
+    :return: '' if ParaSurf can be run, else what is missing
+    '''
+    home = parasurf_home()
+    if not home:
+        return ('ParaSurf is not installed: clone '
+                'https://github.com/aggelos-michael-papadopoulos/ParaSurf'
+                ' next to the PyMOL environment, or set PARASURF_HOME')
+    if not parasurf_weights():
+        return ('ParaSurf\'s weights are missing: put the ".pth" files '
+                'from its README in "%s", or set PARASURF_WEIGHTS'
+                % os.path.join(home, 'weights'))
+    try:
+        from openbabel import pybel  # noqa: F401
+    except ImportError:
+        return ('Open Babel is not installed: "pip install '
+                'openbabel-wheel" in the environment PyMOL runs in')
+    if not parasurf_dms():
+        return ('DMS is missing (ParaSurf computes the surface with it): '
+                'build it with "make" in "%s" and put the binary on the '
+                'PATH' % os.path.join(home, 'dms'))
+    return ''
+
+
+def parasurf_home():
+    '''
+    The cloned ParaSurf repository: $PARASURF_HOME, one already on the
+    path, or a "ParaSurf" folder beside the Python environment or in the
+    home directory
+
+    :return: its path, or ''
+    '''
+    places = [os.environ.get('PARASURF_HOME', '')]
+    try:
+        # its package has no __init__.py, so only __path__ is reliable
+        import ParaSurf
+        for where in list(getattr(ParaSurf, '__path__', None) or []):
+            places.append(os.path.dirname(os.path.abspath(where)))
+    except ImportError:
+        pass
+    places += [os.path.join(os.path.dirname(sys.prefix), 'ParaSurf'),
+               os.path.expanduser('~/ParaSurf')]
+    for place in places:
+        # the repository holds the package of the same name
+        if place and os.path.isdir(os.path.join(place, 'ParaSurf')):
+            return place
+    return ''
+
+
+def parasurf_weights(kind='paired'):
+    '''
+    The weights file for an Fv of this kind ("paired", "heavy" or
+    "light"), falling back on the paired ones
+
+    :return: its path, or ''
+    '''
+    where = os.environ.get('PARASURF_WEIGHTS', '')
+    if where and os.path.isfile(where):
+        return where
+    if not (where and os.path.isdir(where)):
+        home = parasurf_home()
+        where = os.path.join(home, 'weights') if home else ''
+    if not (where and os.path.isdir(where)):
+        return ''
+    files = sorted(f for f in os.listdir(where) if f.endswith('.pth'))
+    wanted = dict(PARASURF_WEIGHTS).get(kind, 'entire')
+    for mark in (wanted, 'entire'):
+        for name in files:
+            if mark in name.lower():
+                return os.path.join(where, name)
+    return os.path.join(where, files[0]) if files else ''
+
+
+def parasurf_dms():
+    '''
+    The DMS binary ParaSurf shells out to: on the PATH, or in the
+    environment's bin directory (where "make install" can put it)
+
+    :return: its path, or ''
+    '''
+    found = shutil.which('dms')
+    if found:
+        return found
+    beside = os.path.join(sys.prefix, 'bin', 'dms')
+    return beside if os.path.exists(beside) else ''
 
 
 def _parapred_weights():
@@ -327,6 +437,180 @@ def _run_paragraph(folder, stems, paired, mapping):
     return found
 
 
+def parasurf_inputs(obj, pairs=(), state=1, _self=cmd):
+    """
+    Write each Fv as its own PDB, as ParaSurf reads them: the chains
+    named H and L, no hydrogens, no het atoms, one conformer, the
+    residues numbered as the structure has them
+
+    :return: (folder, [(file stem, "paired"/"heavy"/"light")],
+        {(stem, written chain, resi): (chain, resi, region)}); the
+        caller removes the folder
+    """
+    pairs = list(pairs) or antibody_pairs(obj, state, _self)
+    if not pairs:
+        raise ValueError('no antibody chain found in "%s"' % obj)
+    folder = tempfile.mkdtemp(prefix='parasurf_')
+    jobs, mapping = [], {}
+    for k, (heavy, light) in enumerate(pairs):
+        stem = 'fv_%d' % k
+        name = _self.get_unused_name('_paratope')
+        try:
+            selections, renames, here = [], {}, {}
+            for chain_id, letter in ((heavy, 'H'), (light, 'L')):
+                if not chain_id:
+                    continue
+                for one, domain, residues in cdr.annotate(
+                        obj, chain_id, 'imgt', state, _self):
+                    if not domain.is_antibody:
+                        continue
+                    renames[one] = letter
+                    regions = {}
+                    for region, places in cdr.region_residues(domain,
+                                                              residues):
+                        for place in places:
+                            regions[place] = region
+                    for _, resi in residues:
+                        here[(letter, str(resi))] = (
+                            one, str(resi), regions.get((one, resi), ''))
+                        selections.append('(chain "%s" and resi %s)'
+                                          % (one, resi))
+            if not selections:
+                continue
+            _self.create(name, '(%%%s) and polymer.protein and not hydro '
+                               'and (alt ""+A) and (%s)'
+                         % (obj, ' or '.join(selections)), state, 1)
+            # one pass, so two chains can swap their names
+            _self.alter(name, 'chain = NEW.get(chain, chain)',
+                        space={'NEW': renames})
+            _self.sort(name)
+            _self.save(os.path.join(folder, stem + '.pdb'), '%' + name, 1)
+        finally:
+            _self.delete(name)
+        kinds = {('H', 'L'): 'paired', ('H',): 'heavy', ('L',): 'light'}
+        kind = kinds.get(tuple(sorted(set(renames.values()))), 'paired')
+        jobs.append((stem, kind))
+        for key, where in here.items():
+            mapping[(stem,) + key] = where
+    return folder, jobs, mapping
+
+
+def parasurf_scores(folder, jobs, mesh_dense=PARASURF_MESH, device='',
+                    progress=None):
+    """
+    Run ParaSurf on the files parasurf_inputs wrote. Makes no PyMOL
+    calls, so it can run off the GUI thread, and takes minutes on a CPU
+
+    :param progress: called with (file stem, number done, total)
+    :return: [(stem, chain, resi, residue name, score)]
+    """
+    import numpy as np
+    import torch
+    home = parasurf_home()
+    if not home:
+        raise ValueError(_parasurf_missing())
+    if home not in sys.path:
+        sys.path.insert(0, home)
+    dms = parasurf_dms()
+    if dms:          # ParaSurf runs it through the shell
+        os.environ['PATH'] = (os.path.dirname(dms) + os.pathsep +
+                              os.environ.get('PATH', ''))
+    from ParaSurf.preprocess.clean_dataset import clean_dataset
+    from ParaSurf.train.protein import Protein_pred
+    from ParaSurf.train.network import Network
+    from ParaSurf.train.utils import receptor_info
+    if not device:
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    # hydrogens and het atoms out (already), atom numbers back in order
+    clean_dataset(folder)
+    found = []
+    for done, (stem, kind) in enumerate(jobs):
+        if progress is not None:
+            progress(stem, done, len(jobs))
+        path = os.path.join(folder, stem + '.pdb')
+        protein = Protein_pred(path, save_path=folder,
+                               mesh_dense=float(mesh_dense))
+        surface = [f for f in os.listdir(protein.save_path)
+                   if 'surfpoints' in f]
+        if not surface:
+            raise ValueError('ParaSurf: DMS wrote no surface for ' + stem)
+        atoms = []
+        with open(os.path.join(protein.save_path, surface[0])) as handle:
+            for place, line in enumerate(handle):
+                parts = line.split()
+                if len(parts) > 6 and parts[6] == 'A':
+                    atoms.append(place)       # a receptor atom, not a
+                                              # point of its surface
+        network = Network(parasurf_weights(kind), gridSize=PARASURF_GRID,
+                          feature_channels=PARASURF_CHANNELS,
+                          device=device)
+        scores = network.get_lig_scores(
+            protein, batch_size=PARASURF_BATCH, add_forcefields=True,
+            add_atom_radius_features=True)
+        best = receptor_info(path, np.array([scores[i] for i in atoms]))[1]
+        names = _pdb_residue_names(path)
+        for res_id, data in best.items():
+            parts = res_id.split('_')         # number_chain[_insertion]
+            if len(parts) < 2:
+                continue
+            resi = parts[0] + (parts[2] if len(parts) > 2 else '')
+            found.append((stem, parts[1], resi, names.get(res_id, ''),
+                          float(data['scores'])))
+    if progress is not None:
+        progress('', len(jobs), len(jobs))
+    return found
+
+
+def parasurf_residues(rows, mapping):
+    """
+    The scores of parasurf_scores on the structure's own chains
+
+    :return: [Residue]
+    """
+    found = []
+    for stem, chain, resi, resn, score in rows:
+        where = mapping.get((stem, chain, resi))
+        if where is None:
+            continue
+        found.append(Residue(where[0], where[1], _one_letter(resn), score,
+                             where[2] if len(where) > 2 else ''))
+    return found
+
+
+def _pdb_residue_names(path):
+    """
+    :return: {ParaSurf's residue id: residue name} of a PDB file
+    """
+    names = {}
+    with open(path) as handle:
+        for line in handle:
+            if not line.startswith('ATOM'):
+                continue
+            res_id = '%s_%s' % (line[22:26].strip(), line[21])
+            if line[26].strip():
+                res_id += '_' + line[26].strip()
+            names.setdefault(res_id, line[17:20].strip())
+    return names
+
+
+def parasurf(obj, pairs=(), mesh_dense=PARASURF_MESH, device='', state=1,
+             _self=cmd):
+    """
+    ParaSurf on a structure: each Fv is written out, its surface
+    computed and scored, and the scores mapped back onto the residues
+
+    :return: [Residue]
+    """
+    folder, jobs, mapping = parasurf_inputs(obj, pairs, state, _self)
+    try:
+        if not jobs:
+            raise ValueError('no variable domain to score in "%s"' % obj)
+        rows = parasurf_scores(folder, jobs, mesh_dense, device)
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+    return parasurf_residues(rows, mapping)
+
+
 def _one_letter(resn):
     from . import seqcompare
     return seqcompare.ONE_LETTER.get(str(resn).upper(), 'X')
@@ -365,9 +649,12 @@ def predict(obj_or_sequence, method=DEFAULT_METHOD, chain='',
         raise ValueError(missing)
     text = str(obj_or_sequence).strip()
     is_object = text in (_self.get_names('objects') or [])
-    if method == 'paragraph':
+    if method in STRUCTURE_METHODS:
         if not is_object:
-            raise ValueError('Paragraph needs a structure: give an object')
+            raise ValueError('%s needs a structure: give an object'
+                             % method_label(method).split(' (')[0])
+        if method == 'parasurf':
+            return parasurf(text, (), PARASURF_MESH, '', state, _self)
         return paragraph(text, (), state, _self)
     if is_object:
         return predict_structure(text, chain, scheme, state, _self)
@@ -432,8 +719,8 @@ def predict_paratope(selection, method=DEFAULT_METHOD, chain='',
 DESCRIPTION
 
     "predict_paratope" marks the residues of an antibody that are
-    likely to bind its antigen, with Parapred (sequence) or Paragraph
-    (structure).
+    likely to bind its antigen, with Parapred (sequence), Paragraph
+    (structure) or ParaSurf (structure).
 
 USAGE
 
@@ -443,7 +730,7 @@ ARGUMENTS
 
     object = str: the structure (or a sequence for Parapred)
 
-    method = parapred or paragraph {default: parapred}
+    method = parapred, paragraph or parasurf {default: parapred}
 
     chain = str: one chain {default: every antibody chain}
 
@@ -455,8 +742,10 @@ ARGUMENTS
 
 NOTES
 
-    Neither predictor scores the whole chain: a residue with no score is
-    one it did not look at, not one it judged not to bind.
+    Parapred and Paragraph do not score the whole chain: a residue with
+    no score is one they did not look at, not one they judged not to
+    bind. ParaSurf scores every residue of the Fv, but takes minutes
+    without a GPU.
 
 EXAMPLE
 

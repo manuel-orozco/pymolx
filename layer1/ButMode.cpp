@@ -529,6 +529,9 @@ int ButModeInit(PyMOLGlobals * G)
     strcpy(I->Code[cButModeMenu], "Menu ");
     strcpy(I->Code[cButModeSeleSet], "Sele ");
     strcpy(I->Code[cButModeSeleToggle], "+/-  ");
+    /* pymolx: add to / take from the selection */
+    strcpy(I->Code[cButModeSeleAdd], "Add  ");
+    strcpy(I->Code[cButModeSeleSub], "Sub  ");
     strcpy(I->Code[cButModeSeleAddBox], "+Box ");
     strcpy(I->Code[cButModeSeleSubBox], "-Box ");
     strcpy(I->Code[cButModeMoveSlabAndZoom], "MvSZ ");
