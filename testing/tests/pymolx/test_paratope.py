@@ -154,6 +154,9 @@ def test_parasurf_is_found():
     for kind in ('heavy', 'light', 'nonsense'):
         assert os.path.isfile(paratope.parasurf_weights(kind))
     assert 0.1 <= paratope.PARASURF_MESH <= 1.0
+    # the GPU when there is one, which is the difference between
+    # seconds and minutes
+    assert paratope.parasurf_device() in ('cuda', 'cpu')
 
 
 @needs_parapred        # ANARCI, which finds the variable domains

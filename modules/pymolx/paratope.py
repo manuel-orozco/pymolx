@@ -169,6 +169,18 @@ def parasurf_weights(kind='paired'):
     return os.path.join(where, files[0]) if files else ''
 
 
+def parasurf_device():
+    """
+    :return: 'cuda' when ParaSurf can use a GPU (seconds), else 'cpu'
+        (minutes)
+    """
+    try:
+        import torch
+        return 'cuda' if torch.cuda.is_available() else 'cpu'
+    except ImportError:
+        return 'cpu'
+
+
 def parasurf_dms():
     '''
     The DMS binary ParaSurf shells out to: on the PATH, or in the
@@ -520,7 +532,7 @@ def parasurf_scores(folder, jobs, mesh_dense=PARASURF_MESH, device='',
     from ParaSurf.train.network import Network
     from ParaSurf.train.utils import receptor_info
     if not device:
-        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        device = parasurf_device()
     # hydrogens and het atoms out (already), atom numbers back in order
     clean_dataset(folder)
     found = []

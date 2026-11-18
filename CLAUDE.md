@@ -16,10 +16,16 @@ used in code and commits: [INCENTIVE_PARITY.md](INCENTIVE_PARITY.md).
 
 - Run: `../pymolx-env/bin/pymol` (GUI). Headless: `pymol -cq script.py`.
 - Optional deps installed: rdkit, gemmi, scipy, openmm (CUDA), pdbfixer,
-  propka, anarci + hmmer (antibody numbering), torch (CPU build),
+  propka, anarci + hmmer (antibody numbering), torch (CUDA),
   parapred-pytorch and Paragraph (paratope prediction, both installed
   from GitHub; parapred's wheel leaves out its weights, which were
   fetched into its package's weights/ folder by hand).
+- torch is 2.15.0+cu132, the plain PyPI wheel (`pip install
+  torch==<version>`; the pytorch.org CUDA indexes lag a release or
+  two). An installed `+cpu` wheel satisfies `torch==<version>`, so pip
+  skips the swap: uninstall torch first. The machine has two GPUs,
+  device 0 the 4090 and device 1 the 5090, and `torch.device("cuda")`
+  (what ParaSurf asks for) takes device 0.
 - ParaSurf (the third paratope predictor) is not a package: it is
   cloned at `../ParaSurf` (found by `paratope.parasurf_home`, or
   `$PARASURF_HOME`), with its three Paragraph-expanded `.pth` weight
@@ -29,8 +35,10 @@ used in code and commits: [INCENTIVE_PARITY.md](INCENTIVE_PARITY.md).
   `../ParaSurf/dms` into the environment with
   `make LIBDIR=../pymolx-env/lib BINDIR=../pymolx-env/bin
   MANDIR=../pymolx-env/share/man/man1 install` (no sudo; the shipped
-  binary wants /usr/local/lib/dms). On this CPU-only torch a scoring
-  run is minutes; with CUDA torch it would be seconds.
+  binary wants /usr/local/lib/dms). An Fv of a Fab (1n8z) takes 16 s
+  at surface detail 0.1 and 33 s at ParaSurf's own 0.3, against 86 s
+  on the CPU, for the same scores to three decimals; a run is still
+  not instant, because ANARCI, DMS and pdb2pqr come first.
 
 ## Tests
 
@@ -161,6 +169,11 @@ used in code and commits: [INCENTIVE_PARITY.md](INCENTIVE_PARITY.md).
 - `load` also runs scripts (`.py`, `.pml`): code wrapping it must not
   take a script for the source of the objects it creates
   (`pymolx.files`).
+- Installing while the GUI runs leaves it half old: `pymolx._init`
+  imports the core modules at startup, so they stay as they were, while
+  a plugin dialog is imported the first time it is opened and comes
+  from the new file ("module 'pymolx.paratope' has no attribute
+  'PARASURF_MESH'"). Restart PyMOL after a build.
 - Never `import pymolx...` inside `execapp()` (pymol_qt_gui): it makes
   `pymolx` a local name there and the GUI doesn't start; import at the
   top of the file.

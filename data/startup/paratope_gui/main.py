@@ -298,9 +298,11 @@ class ParatopeDialog(QtWidgets.QDialog):
             return
         self.running_object = name
         self.run_button.setEnabled(False)
+        gpu = paratope.parasurf_device() == 'cuda'
         self.status.setText(
-            'ParaSurf: computing the surface of %d Fv(s) and scoring '
-            'it... minutes, unless there is a GPU' % len(jobs))
+            'ParaSurf: computing the surface of %d Fv(s) and scoring it '
+            'on the %s...%s' % (len(jobs), 'GPU' if gpu else 'CPU',
+                                '' if gpu else ' This takes minutes.'))
         self.thread = ParaSurfThread(folder, jobs, self.mesh.value())
         self.thread.finished.connect(self._parasurf_done)
         self.thread.start()
