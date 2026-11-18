@@ -27,15 +27,18 @@ used in code and commits: [INCENTIVE_PARITY.md](INCENTIVE_PARITY.md).
   device 0 the 4090 and device 1 the 5090, and `torch.device("cuda")`
   (what ParaSurf asks for) takes device 0.
 - ParaSurf (the third paratope predictor) is not a package: it is
-  cloned at `../ParaSurf` (found by `paratope.parasurf_home`, or
-  `$PARASURF_HOME`), with its three Paragraph-expanded `.pth` weight
-  files downloaded into `../ParaSurf/weights`. It also needs
+  cloned at `/media/pac/data/apps/parasurf`, beside the other tools
+  (`paratope.parasurf_home` looks for "ParaSurf" or "parasurf" next to
+  the environment, next to its checkout and in the home directory, or
+  takes `$PARASURF_HOME`), with its three Paragraph-expanded `.pth`
+  weight files downloaded into its `weights/`. It also needs
   openbabel-wheel, torchsummary, scikit-learn, jsonpickle, matplotlib
-  and h5py (installed), and the DMS surface program, built from
-  `../ParaSurf/dms` into the environment with
-  `make LIBDIR=../pymolx-env/lib BINDIR=../pymolx-env/bin
-  MANDIR=../pymolx-env/share/man/man1 install` (no sudo; the shipped
-  binary wants /usr/local/lib/dms). An Fv of a Fab (1n8z) takes 16 s
+  and h5py (installed), and the DMS surface program, built from its
+  `dms/` into the environment with
+  `make LIBDIR=$ENV/lib BINDIR=$ENV/bin MANDIR=$ENV/share/man/man1
+  install`, with ENV=/media/pac/data/apps/pymolx/pymolx-env (no sudo;
+  the shipped binary wants /usr/local/lib/dms, and `parasurf_dms` also
+  looks in the environment's bin). An Fv of a Fab (1n8z) takes 16 s
   at surface detail 0.1 and 33 s at ParaSurf's own 0.3, against 86 s
   on the CPU, for the same scores to three decimals; a run is still
   not instant, because ANARCI, DMS and pdb2pqr come first.

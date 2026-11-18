@@ -123,8 +123,8 @@ def _parasurf_missing():
 def parasurf_home():
     '''
     The cloned ParaSurf repository: $PARASURF_HOME, one already on the
-    path, or a "ParaSurf" folder beside the Python environment or in the
-    home directory
+    path, or a "ParaSurf" (or "parasurf") folder beside the Python
+    environment, beside its checkout, or in the home directory
 
     :return: its path, or ''
     '''
@@ -136,8 +136,10 @@ def parasurf_home():
             places.append(os.path.dirname(os.path.abspath(where)))
     except ImportError:
         pass
-    places += [os.path.join(os.path.dirname(sys.prefix), 'ParaSurf'),
-               os.path.expanduser('~/ParaSurf')]
+    beside = os.path.dirname(sys.prefix)
+    for root in (beside, os.path.dirname(beside), os.path.expanduser('~')):
+        places += [os.path.join(root, 'ParaSurf'),
+                   os.path.join(root, 'parasurf')]
     for place in places:
         # the repository holds the package of the same name
         if place and os.path.isdir(os.path.join(place, 'ParaSurf')):
