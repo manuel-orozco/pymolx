@@ -495,13 +495,48 @@ def hierarchical(matrix, cutoff, method='average'):
     return [rank[c] for c in labels]
 
 
+def set_aside(labels, min_size):
+    '''
+    Clusters of fewer than min_size models put together as one last
+    "cluster": the models that found no company
+
+    :return: (labels, the label of that pool or None)
+    '''
+    labels = [int(c) for c in labels]
+    small = {c for c in set(labels) if labels.count(c) < min_size}
+    if not small:
+        return labels, None
+    kept = sorted(set(labels) - small)      # (still largest first)
+    rank = {c: k for k, c in enumerate(kept)}
+    return [rank.get(c, len(kept)) for c in labels], len(kept)
+
+
+def cluster_label(c):
+    '''
+    "3" for a cluster, "-" for the models left without one
+    '''
+    return '-' if c.get('unclustered') else str(c['cluster'])
+
+
+def group_name(prefix, c):
+    return '%s_unclustered' % prefix if c.get('unclustered') else \
+        '%s_%d' % (prefix, c['cluster'])
+
+
 class Result:
     '''
     models, matrix, labels and per-cluster summaries
+
+    min_size: clusters with fewer models are no clusters; their models
+    come last as one entry marked "unclustered", without a representative
+    or a best model
     '''
 
     def __init__(self, models, matrix, labels, scores, fit_atoms,
-                 rmsd_atoms, confidences=None, best_by='iptm', higher=None):
+                 rmsd_atoms, confidences=None, best_by='iptm', higher=None,
+                 min_size=1):
+        self.min_size = max(int(min_size), 1)
+        labels, pool = set_aside(labels, self.min_size)
         self.models = models
         # per model {'iptm', 'ptm', 'ranking', 'plddt'} (those known)
         self.confidences = confidences or [{} for _ in models]
@@ -520,6 +555,17 @@ class Result:
         self.clusters = []
         for c in sorted(set(labels)):
             members = [i for i, label in enumerate(labels) if label == c]
+            if c == pool:
+                known = [scores[i] for i in members if scores[i] is not None]
+                self.clusters.append({
+                    'unclustered': True, 'mean_ab_ag_iptm': None,
+                    'cluster': c + 1, 'size': len(members),
+                    'representative': None,
+                    'members': [models[i] for i in members],
+                    'mean_rmsd': None,
+                    'score': sum(known) / len(known) if known else None,
+                    'best': None, 'best_score': None, 'best_by': None})
+                continue
             if len(members) > 1:
                 mean = [sum(matrix[i, j] for j in members if j != i) /
                         (len(members) - 1) for i in members]
@@ -582,8 +628,9 @@ class Result:
         if not known:
             return list(self.clusters)      # (by size, as they are)
         most = max(c['size'] for c in self.clusters)
-        return sorted(self.clusters, key=lambda c: -(
-            c['size'] / most * (c.get('mean_ab_ag_iptm') or 0.0)))
+        return sorted(self.clusters, key=lambda c: (
+            bool(c.get('unclustered')),
+            -(c['size'] / most * (c.get('mean_ab_ag_iptm') or 0.0))))
 
     def table(self):
         pair = any(c.get('mean_ab_ag_iptm') is not None
@@ -598,14 +645,18 @@ class Result:
             'Representative')]
         for c in self.clusters:
             value = c.get('mean_ab_ag_iptm')
-            lines.append(' %-7d %4d  %7.2f%-2s %-6s %s%-*s  %s' % (
-                c['cluster'], c['size'],
-                1 - c['mean_rmsd'] if self.measure == 'epitope'
-                else c['mean_rmsd'], unit,
+            if c.get('unclustered'):
+                within = '%7s%-2s' % ('-', '')
+            else:
+                within = '%7.2f%-2s' % (
+                    1 - c['mean_rmsd'] if self.measure == 'epitope'
+                    else c['mean_rmsd'], unit)
+            lines.append(' %-7s %4d  %s %-6s %s%-*s  %s' % (
+                cluster_label(c), c['size'], within,
                 '%.1f' % c['score'] if c['score'] is not None else '-',
                 ('%-11s' % ('%.2f' % value if value is not None else '-'))
                 if pair else '',
-                width, format_best(c), c['representative']))
+                width, format_best(c), c['representative'] or '-'))
         for c in self.clusters:
             if c['best']:
                 lines.append(' cluster %d best: %s' % (c['cluster'],
@@ -623,6 +674,9 @@ class Result:
             reps = {m: c['representative'] for c in self.clusters
                     for m in c['members']}
             best = {c['best'] for c in self.clusters}
+            # 0: a model left without a cluster (min_size)
+            number = {m: 0 if c.get('unclustered') else c['cluster']
+                      for c in self.clusters for m in c['members']}
 
             def value(conf, key, digits):
                 v = conf.get(key)
@@ -630,7 +684,7 @@ class Result:
 
             for i, model in enumerate(self.models):
                 conf = self.confidences[i]
-                out.writerow([model, self.labels[i] + 1, reps[model] == model,
+                out.writerow([model, number[model], reps[model] == model,
                               model in best, value(conf, 'plddt', 2),
                               value(conf, 'iptm', 3), value(conf, 'ptm', 3),
                               value(conf, 'ranking', 3)] +
@@ -680,6 +734,65 @@ def format_value(value):
     return '%.3f' % value if abs(value) < 10 else '%.1f' % value
 
 
+def scores_table(best_by, scores_csv, _self=cmd):
+    '''
+    The scores CSV, read, and the score to pick the best model by,
+    checked against what there is to pick from
+
+    :return: (best_by, {(job, row name): scores})
+    '''
+    best_by = str(best_by).strip().lower()
+    table = {}
+    if str(scores_csv).strip():
+        table = read_scores_csvs(str(scores_csv).strip(), _self=_self)
+    columns = {k for values in table.values() for k in values}
+    if best_by not in SCORES and best_by not in columns:
+        raise ValueError('best_by must be one of: ' + ', '.join(
+            list(SCORES) + sorted(columns - set(SCORES))))
+    return best_by, table
+
+
+def checked(method, atoms):
+    '''
+    :return: (method, atoms) in lower case, or ValueError
+    '''
+    method = str(method).strip().lower()
+    if method not in METHODS:
+        raise ValueError('method must be one of: ' + ', '.join(METHODS))
+    atoms = str(atoms).strip().lower()
+    if atoms not in ATOMS:
+        raise ValueError('atoms must be one of: ' + ', '.join(ATOMS))
+    return method, atoms
+
+
+def model_scores(models, part, state, scores, table, _self=cmd):
+    '''
+    What is known about each model's quality: the mean B-factor of
+    "part" if it looks like pLDDT (predicted models store it there), the
+    predictor's confidence scores, and the rows of a scores table (which
+    come first)
+
+    :return: ([pLDDT or None], [{score: float}], [rows without a model])
+    '''
+    plddt = []
+    for m in models:
+        values = []
+        _self.iterate_state(state, '%%%s and (%s) and name CA' % (m, part),
+                            'values.append(b)', space={'values': values})
+        mean = sum(values) / len(values) if values else None
+        plddt.append(mean if mean is not None and 0 < mean <= 100 else None)
+    order = sorted(_self.get_chains(models[0]) or [])
+    antibody_ids = antibody_chains(models[0], _self)
+    confidences = [find_scores(m, scores, order, antibody_ids)[0]
+                   for m in models]
+    unmatched = []
+    if table:
+        matched, unmatched = match_scores(models, table)
+        for m, conf in zip(models, confidences):
+            conf.update(matched.get(m, {}))  # (the CSV first)
+    return plddt, confidences, unmatched
+
+
 def compute(objects='', fit='', rmsd='', atoms='ca', cutoff=3.0,
             method='average', state=1, best_by='iptm', scores='',
             scores_csv='', higher=None, measure=DEFAULT_MEASURE,
@@ -690,20 +803,8 @@ def compute(objects='', fit='', rmsd='', atoms='ca', cutoff=3.0,
     :return: Result
     '''
     import numpy as np
-    best_by = str(best_by).strip().lower()
-    table = {}
-    if str(scores_csv).strip():
-        table = read_scores_csvs(str(scores_csv).strip(), _self=_self)
-    columns = {k for values in table.values() for k in values}
-    if best_by not in SCORES and best_by not in columns:
-        raise ValueError('best_by must be one of: ' + ', '.join(
-            list(SCORES) + sorted(columns - set(SCORES))))
-    method = str(method).strip().lower()
-    if method not in METHODS:
-        raise ValueError('method must be one of: ' + ', '.join(METHODS))
-    atoms = str(atoms).strip().lower()
-    if atoms not in ATOMS:
-        raise ValueError('atoms must be one of: ' + ', '.join(ATOMS))
+    best_by, table = scores_table(best_by, scores_csv, _self)
+    method, atoms = checked(method, atoms)
     measure = str(measure).strip().lower()
     if measure not in MEASURES:
         raise ValueError('measure must be one of: ' + ', '.join(MEASURES))
@@ -759,25 +860,8 @@ def compute(objects='', fit='', rmsd='', atoms='ca', cutoff=3.0,
         matrix = rmsd_matrix(fit_xyz, rmsd_xyz)
     labels = gromos(matrix, cutoff) if method == 'gromos' else \
         hierarchical(matrix, cutoff, method)
-
-    # model confidence: mean B-factor of the measured part, if it looks
-    # like pLDDT (predicted models store it there)
-    plddt = []
-    for m in models:
-        values = []
-        _self.iterate_state(state, '%%%s and (%s) and name CA' % (m, rmsd),
-                            'values.append(b)', space={'values': values})
-        mean = sum(values) / len(values) if values else None
-        plddt.append(mean if mean is not None and 0 < mean <= 100 else None)
-    order = sorted(_self.get_chains(models[0]) or [])
-    antibody_ids = antibody_chains(models[0], _self)
-    confidences = [find_scores(m, scores, order, antibody_ids)[0]
-                   for m in models]
-    unmatched = []
-    if table:
-        matched, unmatched = match_scores(models, table)
-        for m, conf in zip(models, confidences):
-            conf.update(matched.get(m, {}))  # (the CSV first)
+    plddt, confidences, unmatched = model_scores(models, rmsd, state,
+                                                 scores, table, _self)
     result = Result(models, matrix, labels, plddt, len(fit_keys),
                     len(rmsd_keys), confidences, best_by, higher)
     result.unmatched_scores = unmatched
@@ -790,6 +874,7 @@ def compute(objects='', fit='', rmsd='', atoms='ca', cutoff=3.0,
 
 CLUSTER_COLORS = ['tv_blue', 'tv_orange', 'forest', 'raspberry', 'teal',
                   'olive', 'violetpurple', 'deepsalmon', 'marine', 'limon']
+UNCLUSTERED_COLOR = 'grey50'    # models left without a cluster
 
 
 def apply(result, superpose=True, group=True, color=True, prefix='cluster',
@@ -800,7 +885,8 @@ def apply(result, superpose=True, group=True, color=True, prefix='cluster',
     representative first), the measured part colored by cluster
     '''
     import numpy as np
-    reference = result.clusters[0]['representative']
+    # (no representative: every model was left without a cluster)
+    reference = result.clusters[0]['representative'] or result.models[0]
     fit_sel = '(%s) and %s' % (result.fit, 'name CA')
     if superpose:
         target = _atoms(reference, fit_sel, state, _self)
@@ -820,7 +906,7 @@ def apply(result, superpose=True, group=True, color=True, prefix='cluster',
     if group:
         # groups of an earlier clustering: emptied, then removed (deleting
         # a group would delete the models in it)
-        pattern = re.compile(r'%s_\d+$' % re.escape(prefix))
+        pattern = re.compile(r'%s_(\d+|unclustered)$' % re.escape(prefix))
         for name in _self.get_names('group_objects') or []:
             members = _self.get_object_list('(%s)' % name) or []
             if pattern.match(name) and set(members) <= set(result.models):
@@ -828,19 +914,20 @@ def apply(result, superpose=True, group=True, color=True, prefix='cluster',
                 _self.delete(name)
     for c in result.clusters:
         if group:
-            name = _self.get_legal_name('%s_%d' % (prefix, c['cluster']))
+            name = _self.get_legal_name(group_name(prefix, c))
             first = [m for m in (c['best'], c['representative']) if m]
             members = list(dict.fromkeys(first)) + [
                 m for m in c['members'] if m not in first]
             _self.group(name, ' '.join(members))
             _self.order(' '.join(members), location='current')
         if color:
-            colour = CLUSTER_COLORS[(c['cluster'] - 1) % len(CLUSTER_COLORS)]
+            colour = UNCLUSTERED_COLOR if c.get('unclustered') else \
+                CLUSTER_COLORS[(c['cluster'] - 1) % len(CLUSTER_COLORS)]
             for m in c['members']:
                 _self.color(colour, '%%%s and (%s) and elem C' % (
                     m, result.rmsd))
     if group:
-        _self.order(' '.join('%s_%d' % (prefix, c['cluster'])
+        _self.order(' '.join(group_name(prefix, c)
                              for c in result.clusters), location='current')
 
 

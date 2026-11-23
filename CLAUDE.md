@@ -145,7 +145,18 @@ used in code and commits: [INCENTIVE_PARITY.md](INCENTIVE_PARITY.md).
   a worker QThread and polls for `job.status`, as `structure_prep_gui`
   does; `Job.save` writes the run out as CSV and as scored PDB files,
   one per pH, so the job's temporary folder is kept until the next run
-  or the dialog closes).
+  or the dialog closes),
+  `irmsd_gui` (interface RMSD clustering of e.g. the models of an
+  epitope prediction, `pymolx.irmsd`; subclasses `ClusterDialog` and
+  replaces its `_settings_box`, `_compute` and `_summary`; clusters
+  smaller than a minimum size are pooled as "unclustered", which
+  `cluster.Result` and `cluster.apply` handle for any clustering),
+  `modify_gui` (Modify Sequences: residue numbers, chain and segment
+  IDs, chains merged into one chain or copied into one object,
+  `pymolx.modify`; every change is a map {(segi, chain, resi): (segi,
+  chain, resi)} that `modify.apply` checks for two residues ending up
+  as one and then makes in a single `alter`; the dialog runs each
+  button in `undo.stack.step(True)`, so it is one undo step).
 - Theme: colors only in `COLORS` (`modules/pymolx/gui/theme.py`), used as
   `$name` in `data/pymolx/styles/dark.qss` (literal `$` must be `$$`).
   Icons: `data/pymolx/icons/*.svg` (own artwork; `<name>-on.svg` = checked).
@@ -293,6 +304,21 @@ used in code and commits: [INCENTIVE_PARITY.md](INCENTIVE_PARITY.md).
   ("'<' not supported between instances of 'NoneType'"). Pass
   `hmmerpath=cdr.hmmer_path()`. Not a Biopython version problem (1.85
   fails the same way).
+- A selection per object is a pass over every atom of the session:
+  `%obj and ... within 10 of ...` costs 0.15 s with 100 predicted
+  complexes loaded (540 000 atoms), so three per model took 46 s.
+  Read all the models in one `iterate_state` and find the neighbours
+  with `scipy.spatial.cKDTree` (`irmsd.heavy_atoms`,
+  `irmsd.close_residues`: 3 s for the same answer).
+- In the GUI an undo step lasts until control is back in the event
+  loop: two changes made in one `QTimer.singleShot` callback of a test
+  script are one step, and the second undo takes back the load. Give
+  each change a callback of its own.
+- `cmd.pseudoatom` gives its atom the segment ID "PSDO" (pass
+  `segi=''`), and `cmd.fab` leaves `_pkbase1`, `_pkfrag1`, ...
+  selections in `get_names('all')`. A residue need not have an alpha
+  carbon (1oky's last one is a lone N): count residues by their
+  (segi, chain, resi), not by `name CA`.
 - Kill test processes by PID, never `pkill -f` with a pattern that
   matches your own shell command.
 - Quitting the GUI by closing the window, File > Quit, the viewer

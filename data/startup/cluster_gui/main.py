@@ -53,7 +53,8 @@ class Heatmap(QtWidgets.QWidget):
         self.result = result
         self.order = []
         for c in result.clusters:
-            members = [c['representative']] + [
+            first = [c['representative']] if c['representative'] else []
+            members = first + [
                 m for m in c['members'] if m != c['representative']]
             self.order += [result.models.index(m) for m in members]
         self.top = max(float(result.matrix.max()), 1e-6)
@@ -93,8 +94,10 @@ class Heatmap(QtWidgets.QWidget):
         painter.setPen(pen)
         start = 0
         for c in self.result.clusters:
-            painter.drawRect(QtCore.QRectF(start * cell, start * cell,
-                                           c['size'] * cell, c['size'] * cell))
+            if not c.get('unclustered'):
+                painter.drawRect(QtCore.QRectF(
+                    start * cell, start * cell,
+                    c['size'] * cell, c['size'] * cell))
             start += c['size']
 
     def mouseMoveEvent(self, event):
@@ -111,13 +114,22 @@ class Heatmap(QtWidgets.QWidget):
 
 
 class ClusterDialog(QtWidgets.QDialog):
+    '''
+    Other ways of clustering subclass this: they replace _settings_box
+    (keeping the widgets of _score_rows and _display_rows), _compute and
+    _summary
+    '''
+
+    TITLE = 'RMSD Clustering'
+    SPREAD = 'Mean RMSD'            # the table's column for a cluster's
+    HEATMAP_NOTE = 'RMSD matrix by cluster (hover for values)'
 
     def __init__(self, parent=None, _self=cmd):
         super().__init__(parent)
         self.cmd = _self
         self.result = None
         self.setObjectName('cluster_dialog')
-        self.setWindowTitle('RMSD Clustering')
+        self.setWindowTitle(self.TITLE)
         self.resize(900, 660)
 
         layout = QtWidgets.QHBoxLayout(self)
@@ -148,7 +160,56 @@ class ClusterDialog(QtWidgets.QDialog):
         column.addLayout(buttons)
         left.addWidget(box, 1)
 
-        # settings
+        left.addWidget(self._settings_box())
+
+        run = QtWidgets.QHBoxLayout()
+        self.status = QtWidgets.QLabel(self)
+        self.status.setObjectName('prep_note')
+        self.status.setWordWrap(True)
+        run.addWidget(self.status, 1)
+        self.run_button = QtWidgets.QPushButton('Cluster', self)
+        self.run_button.setDefault(True)
+        self.run_button.clicked.connect(self.run)
+        run.addWidget(self.run_button)
+        left.addLayout(run)
+
+        # results
+        self.table = QtWidgets.QTableWidget(0, 7, self)
+        self.table.setObjectName('cluster_table')
+        self.table.setHorizontalHeaderLabels(
+            ['Cluster', 'Size', self.SPREAD, 'pLDDT', 'Best', 'Score',
+             'Representative'])
+        self.table.verticalHeader().setVisible(False)
+        self.table.setEditTriggers(
+            QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(
+            QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.itemSelectionChanged.connect(self._show_cluster)
+        right.addWidget(self.table, 2)
+        actions = QtWidgets.QHBoxLayout()
+        show_all = QtWidgets.QPushButton('Show All', self)
+        show_all.clicked.connect(self.show_all)
+        actions.addWidget(show_all)
+        show_best = QtWidgets.QPushButton('Show Best Models', self)
+        show_best.setToolTip('The best model of each cluster only')
+        show_best.clicked.connect(self.show_best)
+        actions.addWidget(show_best)
+        actions.addStretch(1)
+        self.save_button = QtWidgets.QPushButton('Save CSV...', self)
+        self.save_button.setEnabled(False)
+        self.save_button.clicked.connect(self.save_csv)
+        actions.addWidget(self.save_button)
+        right.addLayout(actions)
+        self.heatmap = Heatmap(self)
+        right.addWidget(self.heatmap, 3)
+        note = QtWidgets.QLabel(self.HEATMAP_NOTE, self)
+        note.setObjectName('prep_note')
+        right.addWidget(note)
+
+    # settings
+
+    def _settings_box(self):
         box = QtWidgets.QGroupBox('Settings', self)
         box.setObjectName('prep_step')
         grid = QtWidgets.QGridLayout(box)
@@ -189,13 +250,24 @@ class ClusterDialog(QtWidgets.QDialog):
         self.cutoff.setValue(3.0)
         self.cutoff.setSuffix(' A')
         grid.addWidget(self.cutoff, 6, 1)
-        grid.addWidget(QtWidgets.QLabel('Best model by', box), 7, 0)
+        row = self._score_rows(box, grid, 7)
+        self._display_rows(box, grid, row)
+        self._measure_changed()
+        return box
+
+    def _score_rows(self, box, grid, row):
+        '''
+        The rows on each cluster's best model, from "row" on
+
+        :return: the next free row
+        '''
+        grid.addWidget(QtWidgets.QLabel('Best model by', box), row, 0)
         self.best_by = _combo(box, BEST_BY)
         self.best_by.setToolTip(
             'Scores from the predictor\'s JSON next to each model file '
             '(AlphaFold 3, Boltz, ColabFold); pLDDT from the B-factors')
-        grid.addWidget(self.best_by, 7, 1)
-        grid.addWidget(QtWidgets.QLabel('Scores folder', box), 8, 0)
+        grid.addWidget(self.best_by, row, 1)
+        grid.addWidget(QtWidgets.QLabel('Scores folder', box), row + 1, 0)
         scores = QtWidgets.QHBoxLayout()
         self.scores = QtWidgets.QLineEdit(box)
         self.scores.setPlaceholderText('next to the loaded files')
@@ -207,8 +279,8 @@ class ClusterDialog(QtWidgets.QDialog):
         browse.setMaximumWidth(32)
         browse.clicked.connect(self._browse_scores)
         scores.addWidget(browse)
-        grid.addLayout(scores, 8, 1)
-        grid.addWidget(QtWidgets.QLabel('Scores CSV', box), 9, 0)
+        grid.addLayout(scores, row + 1, 1)
+        grid.addWidget(QtWidgets.QLabel('Scores CSV', box), row + 2, 0)
         scores_csv = QtWidgets.QHBoxLayout()
         self.scores_csv = QtWidgets.QLineEdit(box)
         self.scores_csv.setPlaceholderText('e.g. <job>_ranking_scores.csv')
@@ -222,68 +294,29 @@ class ClusterDialog(QtWidgets.QDialog):
         browse.setMaximumWidth(32)
         browse.clicked.connect(self._browse_csv)
         scores_csv.addWidget(browse)
-        grid.addLayout(scores_csv, 9, 1)
+        grid.addLayout(scores_csv, row + 2, 1)
         self.lower_better = QtWidgets.QCheckBox('Lower score is better', box)
         self.lower_better.setToolTip('Set from the score\'s name (e.g. a rank or an '
                               'energy); change it if needed')
-        grid.addWidget(self.lower_better, 10, 1)
+        grid.addWidget(self.lower_better, row + 3, 1)
         self.best_by.currentIndexChanged.connect(self._best_by_changed)
+        return row + 4
+
+    def _display_rows(self, box, grid, row):
+        '''
+        The rows on what to do with the models, from "row" on
+
+        :return: the next free row
+        '''
         self.superpose = QtWidgets.QCheckBox(
             'Superimpose all on the largest cluster', box)
         self.group = QtWidgets.QCheckBox('Group by cluster', box)
         self.color = QtWidgets.QCheckBox('Color by cluster', box)
-        self._measure_changed()
-        for row, check in enumerate((self.superpose, self.group,
-                                     self.color), 11):
+        for check in (self.superpose, self.group, self.color):
             check.setChecked(True)
             grid.addWidget(check, row, 0, 1, 2)
-        left.addWidget(box)
-
-        run = QtWidgets.QHBoxLayout()
-        self.status = QtWidgets.QLabel(self)
-        self.status.setObjectName('prep_note')
-        self.status.setWordWrap(True)
-        run.addWidget(self.status, 1)
-        self.run_button = QtWidgets.QPushButton('Cluster', self)
-        self.run_button.setDefault(True)
-        self.run_button.clicked.connect(self.run)
-        run.addWidget(self.run_button)
-        left.addLayout(run)
-
-        # results
-        self.table = QtWidgets.QTableWidget(0, 7, self)
-        self.table.setObjectName('cluster_table')
-        self.table.setHorizontalHeaderLabels(
-            ['Cluster', 'Size', 'Mean RMSD', 'pLDDT', 'Best', 'Score',
-             'Representative'])
-        self.table.verticalHeader().setVisible(False)
-        self.table.setEditTriggers(
-            QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.setSelectionBehavior(
-            QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.horizontalHeader().setStretchLastSection(True)
-        self.table.itemSelectionChanged.connect(self._show_cluster)
-        right.addWidget(self.table, 2)
-        actions = QtWidgets.QHBoxLayout()
-        show_all = QtWidgets.QPushButton('Show All', self)
-        show_all.clicked.connect(self.show_all)
-        actions.addWidget(show_all)
-        show_best = QtWidgets.QPushButton('Show Best Models', self)
-        show_best.setToolTip('The best model of each cluster only')
-        show_best.clicked.connect(self.show_best)
-        actions.addWidget(show_best)
-        actions.addStretch(1)
-        self.save_button = QtWidgets.QPushButton('Save CSV...', self)
-        self.save_button.setEnabled(False)
-        self.save_button.clicked.connect(self.save_csv)
-        actions.addWidget(self.save_button)
-        right.addLayout(actions)
-        self.heatmap = Heatmap(self)
-        right.addWidget(self.heatmap, 3)
-        note = QtWidgets.QLabel('RMSD matrix by cluster (hover for values)',
-                                self)
-        note.setObjectName('prep_note')
-        right.addWidget(note)
+            row += 1
+        return row
 
     # structures
 
@@ -370,15 +403,7 @@ class ClusterDialog(QtWidgets.QDialog):
             self.detect()
         QtWidgets.QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
-            self.result = cluster.compute(
-                ' '.join(models), self.fit.text(), self.rmsd.text(),
-                self.atoms.currentData(), self.cutoff.value(),
-                self.method.currentData(),
-                measure=self.measure.currentData(),
-                best_by=self.best_by.currentData(),
-                scores=self.scores.text().strip(),
-                scores_csv=self.scores_csv.text().strip(),
-                higher=not self.lower_better.isChecked(), _self=self.cmd)
+            self.result = self._compute(models)
             cluster.apply(self.result, self.superpose.isChecked(),
                           self.group.isChecked(), self.color.isChecked(),
                           _self=self.cmd)
@@ -388,15 +413,31 @@ class ClusterDialog(QtWidgets.QDialog):
         finally:
             QtWidgets.QApplication.restoreOverrideCursor()
         r = self.result
-        self.status.setText(
-            '%d structures, %d clusters; fit on %d atoms, RMSD of %d%s' % (
-                len(r.models), len(r.clusters), r.fit_atoms, r.rmsd_atoms,
-                '; CSV rows without a model: %d' % len(r.unmatched_scores)
-                if r.unmatched_scores else ''))
+        self.status.setText(self._summary(r) + (
+            '; CSV rows without a model: %d' % len(r.unmatched_scores)
+            if r.unmatched_scores else ''))
         print(r.table())
         self._fill_table()
         self.heatmap.set_result(r)
         self.save_button.setEnabled(True)
+
+    def _compute(self, models):
+        '''
+        :return: the cluster.Result for the chosen structures
+        '''
+        return cluster.compute(
+            ' '.join(models), self.fit.text(), self.rmsd.text(),
+            self.atoms.currentData(), self.cutoff.value(),
+            self.method.currentData(),
+            measure=self.measure.currentData(),
+            best_by=self.best_by.currentData(),
+            scores=self.scores.text().strip(),
+            scores_csv=self.scores_csv.text().strip(),
+            higher=not self.lower_better.isChecked(), _self=self.cmd)
+
+    def _summary(self, r):
+        return '%d structures, %d clusters; fit on %d atoms, RMSD of %d' % (
+            len(r.models), len(r.clusters), r.fit_atoms, r.rmsd_atoms)
 
     def _fill_table(self):
         clusters = self.result.clusters
@@ -404,14 +445,15 @@ class ClusterDialog(QtWidgets.QDialog):
         self.table.setRowCount(len(clusters))
         for row, c in enumerate(clusters):
             short = cluster.short_names(self.result.models)
-            values = [str(c['cluster']), str(c['size']),
-                      '%.2f A' % c['mean_rmsd'],
+            alone = c.get('unclustered')
+            values = [cluster.cluster_label(c), str(c['size']),
+                      '-' if alone else '%.2f A' % c['mean_rmsd'],
                       '%.1f' % c['score'] if c['score'] is not None else '-',
                       short[c['best']] if c['best'] else '-',
                       '%s %s' % (cluster.score_label(c['best_by']),
                                  cluster.format_value(c['best_score']))
                       if c['best'] else '-',
-                      short[c['representative']]]
+                      'unclustered' if alone else short[c['representative']]]
             tips = {4: c['best'], 6: c['representative']}
             for col, value in enumerate(values):
                 item = QtWidgets.QTableWidgetItem(value)
