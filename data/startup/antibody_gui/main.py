@@ -1189,7 +1189,17 @@ class AntibodyDialog(QtWidgets.QDialog):
             'Keep them exactly where the part they came with puts them; '
             'unchecked, they are minimized with the rest')
         grid.addWidget(self.rigid_antigens, 4, 0, 1, 2)
-        grid.addWidget(QtWidgets.QLabel('Disulfides', box), 5, 0)
+        self.swing_arms = QtWidgets.QCheckBox(
+            'Swing an arm at the hinge if it clashes', box)
+        self.swing_arms.setObjectName('antibody_swing_arms')
+        self.swing_arms.setToolTip(
+            'A template\'s arms lie where the Fc\'s partners bind, so a '
+            'receptor or antigen on another part can end up inside an '
+            'arm. This turns the arm about the bond that joins it to '
+            'the hinge, the smallest turn that clears it; nothing else '
+            'moves')
+        grid.addWidget(self.swing_arms, 5, 0, 1, 2)
+        grid.addWidget(QtWidgets.QLabel('Disulfides', box), 6, 0)
         row = QtWidgets.QHBoxLayout()
         self.disulfide_label = QtWidgets.QLabel(box)
         self.disulfide_label.setObjectName('prep_note')
@@ -1199,7 +1209,7 @@ class AntibodyDialog(QtWidgets.QDialog):
                                          'disulfide bonds')
         self.disulfide_button.clicked.connect(self.choose_disulfides)
         row.addWidget(self.disulfide_button)
-        grid.addLayout(row, 5, 1)
+        grid.addLayout(row, 6, 1)
         right.addWidget(box)
         self.disulfides = None        # chosen pairs, or None: automatic
         self.disulfide_args = None    # for the parts they were chosen for
@@ -1420,6 +1430,7 @@ class AntibodyDialog(QtWidgets.QDialog):
             'glycans': self.glycans.isChecked()})
         antigens[2] = s['fc'].get('antigens', '')
         args['antigens'] = tuple(antigens)
+        args['swing'] = self.swing_arms.isChecked()
         args['fusions'] = [
             {'site': part[len('fusion_'):], 'object': s[part]['object'],
              'chain': s[part]['chains'][0], 'linker': s[part]['linker'],

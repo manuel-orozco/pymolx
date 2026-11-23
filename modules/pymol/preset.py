@@ -384,6 +384,17 @@ def interface(selection='*', _self=cmd):
     _self.delete(s)
 
 
+# pymolx: aggregation propensity on a transparent surface
+def aggregation(selection='(all)', _self=cmd):
+    '''
+    Aggregation propensity preset: a half transparent surface coloured
+    by the B-factors, where "aggregation" leaves its scores
+    (pymolx.aggrescan.preset)
+    '''
+    from pymolx import aggrescan
+    return aggrescan.preset(selection, _self=_self)
+
+
 def classified(selection='*', _self=cmd):
     '''
     Equivalent of "auto_show_classified" setting. Sets representations

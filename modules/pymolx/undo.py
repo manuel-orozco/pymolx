@@ -36,7 +36,7 @@ SLOW_SNAPSHOT_SECONDS = 1.0
 UNDOABLE = '''
     fix_structure minimize prepare_structure cluster_rmsd compare_structures
     compare_sequences binding_pocket build_antibody find_cdrs predict_paratope
-    lighting occlusion
+    aggregation lighting occlusion
     alter alter_state align alphatoall angle attach bg_color bond cartoon
     cealign clean color copy create deprotect delete deselect dihedral
     disable distance dss enable extract fab fetch fit fix_chemistry flag

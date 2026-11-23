@@ -16,7 +16,8 @@ used in code and commits: [INCENTIVE_PARITY.md](INCENTIVE_PARITY.md).
 
 - Run: `../pymolx-env/bin/pymol` (GUI). Headless: `pymol -cq script.py`.
 - Optional deps installed: rdkit, gemmi, scipy, openmm (CUDA), pdbfixer,
-  propka, anarci + hmmer (antibody numbering), torch (CUDA),
+  propka, freesasa (aggregation prediction), anarci + hmmer (antibody
+  numbering), torch (CUDA),
   parapred-pytorch and Paragraph (paratope prediction, both installed
   from GitHub; parapred's wheel leaves out its weights, which were
   fetched into its package's weights/ folder by hand).
@@ -42,6 +43,48 @@ used in code and commits: [INCENTIVE_PARITY.md](INCENTIVE_PARITY.md).
   at surface detail 0.1 and 33 s at ParaSurf's own 0.3, against 86 s
   on the CPU, for the same scores to three decimals; a run is still
   not instant, because ANARCI, DMS and pdb2pqr come first.
+
+- Aggrescan4D is re-implemented in `pymolx.aggrescan` from the
+  published Aggrescan3D code, cloned at `/media/pac/data/apps/aggrescan`
+  (`aggrescan3d/`, MIT; see its README.md for what replaces what). The
+  score, its constants and the pH scale are ported into the module, so
+  the clone is reference only. What A4D does with paid tools is done
+  with OpenMM + PDBFixer (optimisation), EvoEF (mutant dG), implicit
+  solvent dynamics (dynamic mode, in place of CABS-flex), PROPKA (3D
+  pKa, in place of pKa-ANI) and a pLDDT cutoff (in place of
+  AlphaCutter).
+- The port is checked against real Aggrescan3D output in
+  `/media/pac/data/apps/aggrescan3d/outputs` (`test_aggrescan.py`
+  skips if absent). Matching it needs the relative exposure rounded to
+  one decimal (`RSA_DECIMALS`), which is the precision A3D reads back
+  from freesasa's `.rsa` text: a residue at 9.96% rounds to 10.0 and
+  crosses the buried threshold, which moves its score and its
+  neighbours'. Without the rounding a handful of residues per
+  structure differ by up to 0.6.
+- Do not score a mutation by the difference of two OpenMM potential
+  energies: the mutant and the wild type differ in composition and
+  that swamps any stability effect (Leu to Arg came out at -183
+  kcal/mol). Minimizing with everything but the new side chain frozen
+  is no better (thousands of kcal/mol: the rebuilt side chain cannot
+  escape a clash). EvoEF's `ComputeStability` against the `_WT`
+  companion it writes beside each mutant gives a usable dG; it takes
+  FoldX's own mutant-file syntax, which A3D also uses.
+- The "aggregation" preset lives in `aggrescan.preset`, hooked into
+  upstream from `preset.aggregation` (`modules/pymol/preset.py`) and
+  listed in `menu.presets` (`modules/pymol/menu.py`). The toolbar's
+  Presets button builds from that same `pymol.menu` data on
+  `aboutToShow`, so a test has to emit that signal before the menu has
+  any actions (showing it would block). Set a preset's transparency on
+  the object, not on the selection `_prepare` hands back: an atom level
+  transparency quietly overrides a later
+  `set transparency, ..., obj`.
+- Scores are written into a PDB the way A3D writes output.pdb: the
+  B-factor column (61-66) at `%6.2f`, occupancy untouched. Pad the
+  line to 80 characters before slicing it, or the element symbol at
+  the end of a PyMOL-written line is lost.
+- A 5 A sphere does not simply lower the scores: it raises them,
+  because most neighbours within 10 A are polar and pull downwards.
+  What it does is keep a residue's score near its own propensity.
 
 ## Tests
 
@@ -96,7 +139,13 @@ used in code and commits: [INCENTIVE_PARITY.md](INCENTIVE_PARITY.md).
   numbering, from a structure or a sequence, `pymolx.cdr`),
   `paratope_gui` (binding residues by Parapred, Paragraph or ParaSurf,
   `pymolx.paratope`; ParaSurf runs in a worker QThread and PyMOL is
-  only called before and after it).
+  only called before and after it),
+  `aggregation_gui` (aggregation propensity and its pH dependence,
+  `pymolx.aggrescan`; the whole analysis is a `Job` the dialog runs in
+  a worker QThread and polls for `job.status`, as `structure_prep_gui`
+  does; `Job.save` writes the run out as CSV and as scored PDB files,
+  one per pH, so the job's temporary folder is kept until the next run
+  or the dialog closes).
 - Theme: colors only in `COLORS` (`modules/pymolx/gui/theme.py`), used as
   `$name` in `data/pymolx/styles/dark.qss` (literal `$` must be `$$`).
   Icons: `data/pymolx/icons/*.svg` (own artwork; `<name>-on.svg` = checked).
@@ -219,6 +268,16 @@ used in code and commits: [INCENTIVE_PARITY.md](INCENTIVE_PARITY.md).
 - A `QMenu.exec` in a slot blocks: a test that emits the signal hangs.
   Build the menu in a method the test can call, and disconnect the
   dialog's own slot before emitting.
+- A full-IgG template's Fab arms lie where the Fc's partners bind, so
+  a receptor carried in with the Fc (`fc_antigens`) lands inside an arm
+  whatever template is used; 1HZH, 1IGT and 1IGY all put more of an arm
+  there than a refined model does, and no intact-IgG structure has its
+  arms posed for a bound receptor (3AY4 and the like are Fc + receptor
+  only, the Fabs being flexible and unresolved). `swing_arms=1` turns
+  the arm at its hinge instead. Turn it about the backbone *carbon*
+  that joins the arm to the hinge, not the alpha carbon: that keeps the
+  peptide bond's length exactly, where pivoting on CA stretches it
+  (1.33 -> 1.68 A) and needs a relaxation afterwards.
 - The antibody builder numbers its stitched chains 1..N, but chains
   carried in with a part (antigens, receptors) keep their own numbering:
   use `assembly.numbers(chain)`, not `enumerate(residues, 1)`.

@@ -138,6 +138,11 @@ REACH = 3.8           # A per residue: a joined end can reach this far
 REACH_SLACK = 0.3     # A
 OVERLAP = 2.0         # A: atoms of different parts this close overlap
 OVERLAP_WARN = 10     # ... a warning from this many atom pairs
+# swinging an arm at its hinge, to clear what is bound to the other
+# parts (a receptor on the Fc sits where a template's arm often lies)
+SWING_CLASH = 2.8     # A: atoms this close count as a clash to clear
+SWING_AXES = 150      # directions sampled on a sphere
+SWING_ANGLES = tuple(range(5, 125, 5))  # degrees tried about each
 SINGLE_CLEARANCE = 3.0  # A: an scFv/VHH moves toward the hinge while it
 SINGLE_OVERLAPS = 10    # has at most this many atom pairs this close
 DISULFIDE_SEARCH = 8.0  # A: SG-SG of cysteine pairs offered as disulfides
@@ -1345,6 +1350,198 @@ def _check_gaps(chain_id, residues, assembly):
         previous = (k, r.ca)
 
 
+def _sphere_axes(count=SWING_AXES):
+    '''
+    Directions spread evenly over a sphere (a Fibonacci spiral)
+    '''
+    golden = np.pi * (3 - np.sqrt(5))
+    axes = []
+    for i in range(count):
+        z = 1 - 2 * (i + 0.5) / count
+        r = np.sqrt(max(0.0, 1 - z * z))
+        axes.append([r * np.cos(golden * i), r * np.sin(golden * i), z])
+    return np.array(axes)
+
+
+def _arm_group(assembly, k):
+    '''
+    What swings when arm k (0 or 1) turns at its hinge: the arm itself,
+    its light chain with anything fused to it, and the chains carried
+    in with either
+
+    :return: (places, pivot, skip) -- places as
+        [(chain, "chains"/"groups", index)], the atom the swing turns
+        about (the arm's last backbone carbon, so the peptide bond to
+        the hinge keeps its length), and the residues to leave out of
+        the clash count (the two either side of that bond)
+    '''
+    arm = 'fab%d' % (k + 1)
+    heavy = assembly.heavy[k]
+    residues = assembly.chains.get(heavy) or []
+    last = max((i for i, r in enumerate(residues) if r.part == arm),
+               default=None)
+    if last is None:
+        return [], None, set()
+    pivot = residues[last].atoms.get('C') or residues[last].atoms.get('CA')
+    if pivot is None:
+        return [], None, set()
+
+    places = [(heavy, 'chains', i) for i in range(last + 1)]
+    # the light chain goes with it, and so does anything fused to it
+    lights = {}
+    found = 0
+    for j in range(2):
+        if assembly.formats['fab%d' % (j + 1)] == 'fab' and \
+                found < len(assembly.light):
+            lights[j] = assembly.light[found]
+            found += 1
+    light = lights.get(k)
+    if light and light in assembly.chains:
+        places += [(light, 'chains', i)
+                   for i in range(len(assembly.chains[light]))]
+        places += [(light, 'groups', i)
+                   for i in range(len(assembly.groups.get(light, ())))]
+    # and the antigens bound to either
+    wanted = {'antigen_' + arm, 'antigen_fusion_light%d' % (k + 1)}
+    for chain, (part, _, _) in assembly.carried.items():
+        if part in wanted:
+            places += [(chain, 'chains', i)
+                       for i in range(len(assembly.chains[chain]))]
+            places += [(chain, 'groups', i)
+                       for i in range(len(assembly.groups.get(chain, ())))]
+    # the arm's own het groups travel with it
+    for chain in (heavy,):
+        for i, g in enumerate(assembly.groups.get(chain, ())):
+            if g.part == arm:
+                places.append((chain, 'groups', i))
+    # the peptide bond at the pivot would read as a clash in every trial
+    skip = {(heavy, 'chains', last), (heavy, 'chains', last + 1)}
+    return places, np.array(pivot[1], dtype=float), skip
+
+
+def _atoms_at(assembly, places):
+    '''
+    The coordinates of a set of (chain, kind, index) residues
+    '''
+    xyz = []
+    for chain, kind, i in places:
+        store = assembly.chains if kind == 'chains' else assembly.groups
+        residues = store.get(chain) or []
+        if i < len(residues):
+            xyz += [coord for _, coord, _ in residues[i].atoms.values()]
+    return np.array(xyz, dtype=float) if xyz else np.zeros((0, 3))
+
+
+def swing_arm(assembly, k, cutoff=SWING_CLASH):
+    '''
+    Turn arm k at its hinge until it no longer runs into the rest of the
+    model, which a receptor or antigen on another part can make it do:
+    an IgG template's arms lie where the Fc's partners bind, and the
+    hinge is flexible enough in reality for the arm to move aside.
+
+    The arm turns about the backbone carbon that joins it to the hinge,
+    so that peptide bond keeps its length; the hinge itself does not
+    move, and the refinement relaxes it afterwards.
+
+    :return: (clashes before, clashes after, degrees turned), or None if
+        the arm is not there
+    '''
+    from scipy.spatial import cKDTree
+    places, pivot, skip = _arm_group(assembly, k)
+    if pivot is None:
+        return None
+    moving = set(places)
+    fixed = []
+    for store, kind in ((assembly.chains, 'chains'),
+                        (assembly.groups, 'groups')):
+        for chain, residues in store.items():
+            for i in range(len(residues)):
+                if (chain, kind, i) not in moving and \
+                        (chain, kind, i) not in skip:
+                    fixed.append((chain, kind, i))
+    mobile = [p for p in places if p not in skip]
+    xyz = _atoms_at(assembly, mobile)
+    other = _atoms_at(assembly, fixed)
+    if not len(xyz) or not len(other):
+        return None
+
+    # only what the arm can reach matters
+    reach = np.linalg.norm(xyz - pivot, axis=1).max() + cutoff
+    near = other[np.linalg.norm(other - pivot, axis=1) <= reach]
+    if not len(near):
+        return (0, 0, 0.0)
+    tree = cKDTree(near)
+
+    def clashes(points):
+        return int((tree.query(points, distance_upper_bound=cutoff)[0]
+                    < cutoff).sum())
+
+    before = clashes(xyz)
+    if not before:
+        return (0, 0, 0.0)
+
+    centred = xyz - pivot
+    # the smallest turn that clears, over every direction: an arm should
+    # leave the template's placement as little as it can
+    best = None
+    clean = None        # the smallest angle known to clear
+    for axis in _sphere_axes():
+        for degrees in SWING_ANGLES:
+            if clean is not None and degrees >= clean:
+                break   # this axis cannot beat what is already found
+            rotation = _axis_rotation(axis, np.radians(degrees))
+            n = clashes(centred @ rotation.T + pivot)
+            if best is None or (n, degrees) < (best[0], best[1]):
+                best = (n, degrees, axis)
+            if not n:
+                clean = degrees
+                break
+    after, degrees, axis = best
+    if after >= before:
+        return (before, before, 0.0)
+    rotation = _axis_rotation(axis, np.radians(degrees))
+    shift = pivot - rotation @ pivot
+    for chain, kind, i in places:
+        store = assembly.chains if kind == 'chains' else assembly.groups
+        residues = store.get(chain) or []
+        if i < len(residues):
+            residues[i] = residues[i].moved(rotation, shift)
+    arm = 'fab%d' % (k + 1)
+    if arm in assembly.transforms:
+        old_rotation, old_shift = assembly.transforms[arm]
+        assembly.transforms[arm] = (rotation @ old_rotation,
+                                    rotation @ old_shift + shift)
+    return (before, after, float(degrees))
+
+
+def _swing_all(assembly, cutoff=SWING_CLASH):
+    '''
+    Swing whichever arms run into the rest of the model (swing_arm).
+    Named apart from build_antibody's "swing_arms" option, which would
+    shadow it there
+    '''
+    for k in range(2):
+        label = assembly.labels.get('fab%d' % (k + 1), 'arm %d' % (k + 1))
+        found = swing_arm(assembly, k, cutoff)
+        if found is None:
+            continue
+        before, after, degrees = found
+        if not before:
+            assembly.say('%s: nothing to swing clear of' % label)
+        elif not degrees:
+            assembly.warn('%s: %d atoms closer than %g A to the rest of '
+                          'the model, and no swing at the hinge clears '
+                          'them' % (label, before, cutoff))
+        elif after:
+            assembly.say('%s: swung %.0f degrees at the hinge, %d atom(s) '
+                         'still closer than %g A (down from %d)'
+                         % (label, degrees, after, cutoff, before))
+        else:
+            assembly.say('%s: swung %.0f degrees at the hinge, clear of '
+                         'the rest of the model (was %d atoms closer than '
+                         '%g A)' % (label, degrees, before, cutoff))
+
+
 def parse_arms(text):
     '''
     "fab+scfv" (or "fab,scfv", "Fab/scFv") -> ["fab", "scfv"]
@@ -1380,7 +1577,7 @@ def assemble(fab1, fc, fab2='', template=DEFAULT_TEMPLATE, hinge='',
              arm_orientations=('', ''),
              arm_scfv_linkers=(DEFAULT_SCFV_LINKER,) * 2,
              fusion_linkers='relaxed', antigens=('', '', ''),
-             _self=cmd):
+             swing=False, _self=cmd):
     '''
     Place and stitch the parts (see the module's description); fab1,
     fab2: the arms' structures, of the formats "arms"; fusions: units
@@ -1558,6 +1755,9 @@ def assemble(fab1, fc, fab2='', template=DEFAULT_TEMPLATE, hinge='',
             carry_chains(assembly, 'fusion_' + fusion['site'],
                          fusion['object'], fusion['antigens'], state,
                          glycans, _self)
+    if swing:
+        # after the fusions, so a unit on a light chain swings with it
+        _swing_all(assembly)
     _unthread_clashes(assembly)
     for chain_id, residues in assembly.chains.items():
         _check_gaps(chain_id, residues, assembly)
@@ -2423,7 +2623,7 @@ def build_antibody(fab1, fc, fab2='', template=DEFAULT_TEMPLATE, hinge='',
                    orientation1='', orientation2='',
                    fusion_linkers='relaxed',
                    fab1_antigens='', fab2_antigens='', fc_antigens='',
-                   rigid_antigens=0,
+                   rigid_antigens=0, swing_arms=0,
                    forcefield='amber14', platform='auto', state=-1, quiet=0,
                    *, _self=cmd):
     '''
@@ -2498,6 +2698,13 @@ ARGUMENTS
     sites heavy1, heavy2, light1, light2, or heavy / light for both;
     linker e.g. (G4S)3 {default linker: (G4S)2}
 
+    swing_arms = 0/1: turn an arm at its hinge when it runs into the
+    rest of the model, which a receptor or an antigen bound to another
+    part can make it do: an IgG template's arms lie where the Fc's
+    partners bind. The arm turns about the bond that joins it to the
+    hinge, so nothing else moves and the refinement relaxes the hinge
+    afterwards {default: 0}
+
     disulfides = str: exactly these disulfide bonds, in the model's
     numbering, e.g. "H/223-L/214, H/229-K/229" (chosen cysteines apart
     are brought together by the refinement), or "none" {default: those
@@ -2510,6 +2717,7 @@ EXAMPLE
     build_antibody fab_model, fc_model, hinge_sequence=ESKYGPPCPPCP
     build_antibody 1n8z, 3ave, scfv_model, arms=fab+scfv
     build_antibody 1n8z, 3ave, fusions=heavy:2ghw/B:(G4S)3
+    build_antibody fab, fc, fc_antigens=C, swing_arms=1
 
 SEE ALSO
 
@@ -2525,7 +2733,7 @@ SEE ALSO
                         fusion_linkers=str(fusion_linkers).strip().lower(),
                         antigens=(fab1_antigens, fab2_antigens,
                                   fc_antigens),
-                        _self=_self)
+                        swing=bool(int(swing_arms)), _self=_self)
     assembly.rigid_antigens = bool(int(rigid_antigens))
     assembly.disulfides = pairs
     name = object_name(name, _self)

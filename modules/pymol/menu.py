@@ -745,6 +745,8 @@ def presets(self_cmd, sele):
               [ 1, 'publication (with solvent)'   , 'preset.pub_solv("'+sele+'",_self=cmd)'          ],
               [ 0, ''               ,''                             ],
               [ 1, 'protein interface', 'preset.interface("'+sele+'",_self=cmd)' ],
+              # pymolx: aggregation propensity (pymolx.aggrescan)
+              [ 1, 'aggregation', 'preset.aggregation("'+sele+'",_self=cmd)' ],
               [ 0, '', '' ],
               [ 1, 'default'   ,'preset.default("'+sele+'",_self=cmd)'          ],
               ]

@@ -1030,6 +1030,12 @@ def test_dialog(pdb):
             'fc': {'object': 'fc', 'chains': ('H', 'K')},
             'template': {'object': '1hzh', 'chains': ('H', 'L', 'K', 'M')}})
         dialog._show_specs()
+        # the swing option is off by default and reaches the builder
+        assert not dialog.swing_arms.isChecked()
+        assert dialog._arguments()['swing'] is False
+        dialog.swing_arms.setChecked(True)
+        assert dialog._arguments()['swing'] is True
+        dialog.swing_arms.setChecked(False)
         assert sch.assigned['fab1'] and not sch.assigned['hinge']
         assert dialog.part_labels['fab2'].text() == 'fab2 (heavy K, light M)'
         from pmg_tk.startup.antibody_gui.main import DisulfideDialog
@@ -1155,3 +1161,131 @@ def test_dialog(pdb):
         assert not dialog.grab().isNull()
     finally:
         dialog.deleteLater()
+
+
+# --- swinging an arm clear at the hinge -------------------------------
+
+
+def fc_with_a_blocker(pdb):
+    '''
+    The Fc of 1HZH carrying one of its own light chains (M), which the
+    builder then places where arm 2 goes: a stand-in for a receptor
+    bound to the Fc, which is where a template's arm tends to lie
+    '''
+    split_template(pdb)
+    cmd.create('fc_blocked', '1hzh and ((chain H+K and resi 236-500 and '
+               'polymer) or chain M)')
+    cmd.rotate('y', 100, 'fc_blocked', camera=0, origin=[0, 0, 0])
+    cmd.translate([15, -20, 30], 'fc_blocked', camera=0)
+
+
+def blocked_build(name, swing):
+    return cmd.build_antibody('fab', 'fc_blocked', fc_chains='HK',
+                              fc_antigens='M', swing_arms=swing,
+                              refine=0, name=name, quiet=1)
+
+
+def arm_clashes(name, cutoff=2.8):
+    return cmd.select(
+        '_sw', '(%s and custom AGNF and not hydro) within %g of '
+               '(%s and (custom FAB1 or custom FAB2) and not hydro)'
+               % (name, cutoff, name))
+
+
+def test_a_chain_on_the_fc_lands_on_an_arm(pdb):
+    # the situation the option exists for
+    fc_with_a_blocker(pdb)
+    blocked_build('plain', 0)
+    assert cmd.count_atoms('plain and custom AGNF') > 0
+    assert arm_clashes('plain') > 50
+
+
+def test_swing_clears_the_arm(pdb):
+    fc_with_a_blocker(pdb)
+    before = blocked_build('plain', 0)
+    after = blocked_build('swung', 1)
+    # a whole light chain dropped on the arm is an extreme case: the
+    # swing cannot always clear every atom, but it must come close
+    assert arm_clashes('plain') > 50
+    assert arm_clashes('swung') < arm_clashes('plain') / 50
+    assert any('swung' in line for line in after.log)
+    assert before.warnings and not after.warnings
+
+
+def test_swing_is_off_by_default(pdb):
+    fc_with_a_blocker(pdb)
+    plain = cmd.build_antibody('fab', 'fc_blocked', fc_chains='HK',
+                               fc_antigens='M', refine=0, name='default',
+                               quiet=1)
+    assert arm_clashes('default') > 50
+    assert not any('swung' in line for line in plain.log)
+
+
+def worst_peptide_bond(name):
+    # the longest C-N between consecutive residues that both have
+    # coordinates (a chain carried in may have its own breaks)
+    worst = 0.0
+    for chain in cmd.get_chains(name):
+        rows = []
+        cmd.iterate_state(1, '%s and chain %s and polymer and name C+N'
+                          % (name, chain), 'rows.append((resv, name, x, y, z))',
+                          space={'rows': rows})
+        by = {}
+        for resv, atom, x, y, z in rows:
+            by.setdefault(resv, {})[atom] = np.array([x, y, z])
+        for resv in sorted(by):
+            here, after = by.get(resv, {}), by.get(resv + 1, {})
+            if 'C' in here and 'N' in after:
+                worst = max(worst, float(np.linalg.norm(here['C'] -
+                                                        after['N'])))
+    return worst
+
+
+def test_swing_stretches_nothing(pdb):
+    # the arm turns about the bond joining it to the hinge, so the model
+    # is no more strained than it was before the swing
+    fc_with_a_blocker(pdb)
+    blocked_build('plain', 0)
+    blocked_build('swung', 1)
+    assert worst_peptide_bond('swung') <= worst_peptide_bond('plain') + 0.05
+
+
+def test_swing_moves_only_the_arm_that_clashes(pdb):
+    fc_with_a_blocker(pdb)
+    blocked_build('plain', 0)
+    blocked_build('swung', 1)
+
+    def cas(name, tag):
+        rows = {}
+        cmd.iterate_state(1, '%s and custom %s and name CA' % (name, tag),
+                          'rows[(chain, resv)] = (x, y, z)',
+                          space={'rows': rows})
+        return rows
+
+    def moved(tag):
+        a, b = cas('plain', tag), cas('swung', tag)
+        shared = set(a) & set(b)
+        assert shared, tag
+        return max(float(np.linalg.norm(np.array(a[k]) - np.array(b[k])))
+                   for k in shared)
+
+    # the Fc and the chain bound to it stay exactly where they were
+    assert moved('FC') < 0.01
+    assert moved('AGNF') < 0.01
+    # the clashing arm has moved
+    assert moved('FAB2') > 5.0
+
+
+def test_swing_says_so_either_way(pdb):
+    # a chain around the hinge itself cannot be escaped by turning the
+    # arm; whatever happens, the log says what became of it
+    split_template(pdb)
+    cmd.create('fc_hinge', '1hzh and ((chain H+K and resi 236-500 and '
+               'polymer) or (chain H and resi 226-235))')
+    cmd.rotate('y', 100, 'fc_hinge', camera=0, origin=[0, 0, 0])
+    cmd.translate([15, -20, 30], 'fc_hinge', camera=0)
+    assembly = cmd.build_antibody('fab', 'fc_hinge', fc_chains='HK',
+                                  fc_antigens='H', swing_arms=1, refine=0,
+                                  name='stuck', quiet=1)
+    assert any('swung' in line or 'no swing' in line or 'nothing to swing'
+               in line for line in assembly.log + assembly.warnings)
