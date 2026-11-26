@@ -302,6 +302,44 @@ def test_errors():
             irmsd.compute(**dict({'objects': 'model_*'}, **wrong))
 
 
+def test_matrix_as_pair_by_pair():
+    rng = np.random.default_rng(1)
+    n, atoms = 31, 120
+    base = rng.normal(size=(atoms, 3)) * 15 + [80, -40, 120]
+    xyz = base + rng.normal(size=(n, atoms, 3)) * rng.uniform(
+        0.0, 3.0, size=(n, 1, 1))
+    xyz[7] = xyz[3]                         # the same structure twice
+    xyz[9] = xyz[3] + 1e-5 * rng.normal(size=(atoms, 3))
+    masks = rng.random((n, atoms)) < 0.25
+    masks[:, :5] = False                    # atoms in no interface
+    slow = np.zeros((n, n))
+    counts = []
+    for i in range(n):
+        for j in range(i + 1, n):
+            use = masks[i] | masks[j]
+            counts.append(int(use.sum()))
+            slow[i, j] = slow[j, i] = irmsd.irmsd(xyz[i][use], xyz[j][use])
+    fast, compared = irmsd.irmsd_matrix(xyz, masks, 'pair')
+    assert np.allclose(fast, slow, rtol=0, atol=1e-9)
+    assert compared == (min(counts), max(counts))
+    assert np.array_equal(fast, fast.T) and not fast.diagonal().any()
+    # (nearly) the same structure: measured, not a difference of sums
+    assert fast[3, 7] < 1e-10
+    assert fast[3, 9] == pytest.approx(slow[3, 9], rel=1e-6)
+    assert 0 < fast[3, 9] < irmsd.EXACT_BELOW
+    shared = masks.any(axis=0)
+    slow = np.array([[irmsd.irmsd(xyz[i][shared], xyz[j][shared])
+                      if i != j else 0.0 for j in range(n)]
+                     for i in range(n)])
+    fast, compared = irmsd.irmsd_matrix(xyz, masks, 'all')
+    assert np.allclose(fast, slow, rtol=0, atol=1e-10)
+    assert compared == (shared.sum(), shared.sum())
+    assert irmsd.irmsd_matrix(xyz[:1], masks[:1])[0].tolist() == [[0.0]]
+    assert irmsd.irmsd_matrix(xyz[:2], masks[:2])[0][0, 1] == \
+        pytest.approx(irmsd.irmsd(xyz[0][masks[0] | masks[1]],
+                                  xyz[1][masks[0] | masks[1]]))
+
+
 def test_dialog(tmp_path):
     QtWidgets = pytest.importorskip('pymol.Qt').QtWidgets
     if QtWidgets.QApplication.instance() is None:

@@ -120,6 +120,20 @@ def app():
             QtWidgets.QApplication(['pymolx-test']))
 
 
+def add_toolbar(win):
+    '''
+    The main toolbar, which has the sequence, timeline and output
+    switches, with stand-ins for the window's actions behind its buttons.
+    '''
+    from pymolx.gui import toolbar
+    for name in ('open_builder_panel', 'scene_panel_menu_dialog',
+                 'render_dialog', 'get_view', 'open_props_dialog'):
+        setattr(win, name, lambda *args: None)
+    win.toolbar = toolbar.setup(win)
+    win.toolbar.undo_timer.stop()
+    win.toolbar.zoom_timer.stop()
+
+
 @pytest.fixture
 def window(app):
     from pymolx.gui import content_panel
@@ -140,6 +154,7 @@ def window(app):
                       win.ext_window)
     win.setCentralWidget(QtWidgets.QWidget())
 
+    add_toolbar(win)
     win.content_panel = content_panel.setup(win)
     win.content_panel.timer.stop()
     yield win
@@ -228,7 +243,10 @@ def test_group_arrow(window):
 
 @needs_qt
 def test_toggles(window):
-    toggles = window.content_panel.toggles
+    # (they were a strip under the content panel, which now only sets
+    # how the output starts)
+    toggles = window.toolbar
+    assert not hasattr(window.content_panel, 'toggles')
 
     # the Qt sequence viewer, not the OpenGL bar (test_sequence.py)
     toggles.seq_button.click()
@@ -248,7 +266,8 @@ def test_toggles(window):
 
     cmd.mouse('three_button_editing')
     fire_setting_callbacks(window)
-    assert toggles.mouse_button.text() == cmd.get('button_mode_name')
+    assert toggles.mouse_button.caption == \
+        cmd.get('button_mode_name').upper()
     cmd.mouse('three_button_viewing')
 
 

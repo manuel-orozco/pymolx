@@ -445,6 +445,20 @@ def app():
             QtWidgets.QApplication(['pymolx-test']))
 
 
+def add_toolbar(win):
+    '''
+    The main toolbar, which has the sequence, timeline and output
+    switches, with stand-ins for the window's actions behind its buttons.
+    '''
+    from pymolx.gui import toolbar
+    for name in ('open_builder_panel', 'scene_panel_menu_dialog',
+                 'render_dialog', 'get_view', 'open_props_dialog'):
+        setattr(win, name, lambda *args: None)
+    win.toolbar = toolbar.setup(win)
+    win.toolbar.undo_timer.stop()
+    win.toolbar.zoom_timer.stop()
+
+
 @pytest.fixture
 def window(app):
     from pymolx.gui import content_panel, sequence_viewer
@@ -484,6 +498,7 @@ def window(app):
     mode.addAction('Residue Codes')
     win.sequence_mode_menu = mode
 
+    add_toolbar(win)
     win.content_panel = content_panel.setup(win)
     win.content_panel.timer.stop()
     win.prefs = sequence_viewer.MemoryPrefs()
@@ -533,7 +548,7 @@ def cell_center(viewer, row, res):
 def test_seq_toggle_shows_qt_viewer(window):
     viewer = window.sequence_viewer
     dock = window.sequence_dock
-    button = window.content_panel.toggles.seq_button
+    button = window.toolbar.seq_button
     cmd.fab('ACDEF', 'p')
 
     assert dock.isHidden()
@@ -549,7 +564,7 @@ def test_seq_toggle_shows_qt_viewer(window):
 @needs_qt
 def test_seq_view_setting_and_menu(window):
     viewer = window.sequence_viewer
-    button = window.content_panel.toggles.seq_button
+    button = window.toolbar.seq_button
     cmd.fab('ACDEF', 'p')
 
     cmd.set('seq_view', 1)

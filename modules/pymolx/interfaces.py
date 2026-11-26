@@ -13,6 +13,10 @@ For each pair of polymer chains in contact within one object:
 - interface residues with buried area, dG contribution and bond flags
 
 No P-value, CSS or assembly prediction (these need PISA itself).
+
+Also the epitope (the residues of chosen target chains buried by the
+other chains) and the proximity profile: how close each residue of the
+targets comes to the other chains.
 '''
 
 import itertools
@@ -511,6 +515,200 @@ def format_epitope(by_chain, names='one'):
     return '\n'.join('%s: %s' % (chain or '-',
                                  format_residues(residues, names))
                      for chain, residues in by_chain.items())
+
+
+# proximity profile: how close each residue of the targets comes to the
+# other chains
+
+# atoms closer than this (clashes of a predicted model) score no higher
+PROXIMITY_MIN_DISTANCE = 1.0
+CONTACT_DISTANCE = 4.0     # the default "in contact" line of the profile
+# the score at which the profile's colors end (2.5 A): fixed, so that
+# two profiles, or two colored structures, can be compared
+PROXIMITY_SCORE_TOP = 0.4
+# the viewer's colors for a profile: this many steps along the ramp, named
+PROXIMITY_COLOR_STEPS = 100
+PROXIMITY_COLOR_NAME = 'proximity_%03d'
+
+
+class ChainAtoms:
+    '''
+    Heavy atoms of an object's polymer chains with their coordinates,
+    read once (residue_atoms) so that proximity() needs no PyMOL calls
+    '''
+
+    def __init__(self):
+        self.residues = []  # (chain, resi, resn), in the object's order
+        self.owner = []     # per atom: index of its residue
+        self.xyz = []       # per atom: coordinates
+
+    def chains(self):
+        return sorted({chain for chain, _, _ in self.residues})
+
+
+def residue_atoms(obj, state=-1, *, _self=cmd):
+    '''
+    :return: ChainAtoms of the object's polymer chains
+    '''
+    if state < 1:
+        state = _self.get_state()
+    rows = []
+    _self.iterate_state(
+        state, '%%%s and polymer and not hydro' % obj,
+        'rows.append((chain, resi, resn, x, y, z))', space={'rows': rows})
+    atoms = ChainAtoms()
+    index = {}
+    for chain, resi, resn, x, y, z in rows:
+        key = (chain, resi, resn)
+        if key not in index:
+            index[key] = len(atoms.residues)
+            atoms.residues.append(key)
+        atoms.owner.append(index[key])
+        atoms.xyz.append((x, y, z))
+    return atoms
+
+
+def _nearest(xyz1, xyz2, tree=True):
+    '''
+    For each point of xyz1, the closest point of xyz2
+
+    :param tree: use scipy's k-d tree if it is installed
+    :return: (distances, indices into xyz2)
+    '''
+    cKDTree = None
+    if tree:
+        try:
+            from scipy.spatial import cKDTree
+        except ImportError:
+            pass
+    if cKDTree is not None:
+        return cKDTree(xyz2).query(xyz1)
+    distance = numpy.empty(len(xyz1))
+    index = numpy.empty(len(xyz1), dtype=int)
+    square2 = (xyz2**2).sum(1)
+    for i in range(0, len(xyz1), 256):
+        block = xyz1[i:i + 256]
+        squared = ((block**2).sum(1)[:, None] + square2[None, :] -
+                   2.0 * block @ xyz2.T)
+        best = squared.argmin(1)
+        index[i:i + 256] = best
+        distance[i:i + 256] = numpy.sqrt(numpy.maximum(
+            squared[numpy.arange(len(block)), best], 0.0))
+    return distance, index
+
+
+def proximity(atoms, targets):
+    '''
+    How close each residue of the target chains comes to the other
+    chains: the distance between the closest pair of heavy atoms, one
+    of the residue and one of any chain that isn't a target.
+
+    :param atoms: ChainAtoms (residue_atoms)
+    :return: {chain: [(resi, resn, distance, partner)]}: every residue of
+        the target chains in the object's order, partner being the
+        (chain, resi, resn) of the residue it is closest to; {} without
+        targets or without other chains
+    '''
+    targets = set(targets)
+    is_target = numpy.array([atoms.residues[k][0] in targets
+                             for k in atoms.owner], dtype=bool)
+    if not is_target.any() or is_target.all():
+        return {}
+    owner = numpy.array(atoms.owner)
+    xyz = numpy.array(atoms.xyz, dtype=float)
+    distance, index = _nearest(xyz[is_target], xyz[~is_target])
+    partner_owner = owner[~is_target]
+    closest = {}  # residue index -> (distance, partner residue index)
+    for k, d, j in zip(owner[is_target].tolist(), distance.tolist(),
+                       index.tolist()):
+        if k not in closest or d < closest[k][0]:
+            closest[k] = (d, int(partner_owner[j]))
+    result = {}
+    for k in sorted(closest):
+        chain, resi, resn = atoms.residues[k]
+        d, partner = closest[k]
+        result.setdefault(chain, []).append(
+            (resi, resn, d, atoms.residues[partner]))
+    return dict(sorted(result.items()))
+
+
+def proximity_score(distance):
+    '''
+    The profile's score, inversely proportional to the distance: 1/A
+    (0.25 at 4 A, 0.1 at 10 A)
+    '''
+    return 1.0 / max(distance, PROXIMITY_MIN_DISTANCE)
+
+
+def proximity_fraction(distance):
+    '''
+    Where a distance lies on the profile's color ramp: 0 (far) to 1
+    (PROXIMITY_SCORE_TOP and above: 2.5 A and closer)
+    '''
+    return min(1.0, proximity_score(distance) / PROXIMITY_SCORE_TOP)
+
+
+def ramp_rgb(ramp, fraction):
+    '''
+    The color at a fraction (0 to 1) of a ramp
+
+    :param ramp: its colors from 0 to 1, each "#rrggbb"
+    :return: (r, g, b), each 0 to 1
+    '''
+    stops = [tuple(int(color.lstrip('#')[k:k + 2], 16) / 255.0
+                   for k in (0, 2, 4)) for color in ramp]
+    position = min(1.0, max(0.0, fraction)) * (len(stops) - 1)
+    k = min(int(position), len(stops) - 2)
+    return tuple(a + (b - a) * (position - k)
+                 for a, b in zip(stops[k], stops[k + 1]))
+
+
+def color_proximity(obj, by_chain, ramp, *, _self=cmd):
+    '''
+    Color the residues of a profile in the viewer by how close they come
+    to the other chains, as the profile's graph does: all their atoms,
+    and nothing else of the object.
+
+    :param by_chain: proximity()'s {chain: [(resi, resn, distance,
+        partner)]}
+    :param ramp: the colors from far to close, each "#rrggbb" (the
+        graph's are theme.COLORS' proximity_0 to proximity_4)
+    :return: the number of residues colored
+    '''
+    indices = []
+    for step in range(PROXIMITY_COLOR_STEPS + 1):
+        name = PROXIMITY_COLOR_NAME % step
+        _self.set_color(name, list(ramp_rgb(
+            ramp, step / PROXIMITY_COLOR_STEPS)))
+        indices.append(_self.get_color_index(name))
+    colors = {}
+    for chain, rows in by_chain.items():
+        for resi, _, distance, _ in rows:
+            colors[(chain, resi)] = indices[round(
+                PROXIMITY_COLOR_STEPS * proximity_fraction(distance))]
+    if colors:
+        # (one pass over the object, not a "color" per residue)
+        _self.alter('%%%s and polymer' % obj,
+                    'color = colors.get((chain, resi), color)',
+                    space={'colors': colors})
+        _self.recolor('%' + obj)
+    return len(colors)
+
+
+def format_proximity(by_chain):
+    '''
+    The profile as a tab-separated table, one line per residue
+    '''
+    lines = ['\t'.join(('chain', 'residue', 'number', 'distance (A)',
+                        'score (1/A)', 'closest chain', 'closest residue',
+                        'closest number'))]
+    for chain, residues in by_chain.items():
+        for resi, resn, distance, partner in residues:
+            lines.append('\t'.join((
+                chain, resn, resi, '%.2f' % distance,
+                '%.3f' % proximity_score(distance), partner[0], partner[2],
+                partner[1])))
+    return '\n'.join(lines)
 
 
 def epitope(selection='', target='', min_bsa=0.0, names='one', state=-1,

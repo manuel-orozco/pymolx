@@ -22,7 +22,7 @@ def _init(_self):
     from . import info, undo, interfaces, mm, lighting, missing, prep
     from . import diagnostics, cluster, compare, seqcompare, pocket
     from . import antibody, unsaved, cdr, paratope, aggrescan, irmsd
-    from . import modify
+    from . import modify, labels
     info.extend(_self)
     mm.extend(_self)  # before undo.install: one undo step per call
     prep.extend(_self)
@@ -37,6 +37,7 @@ def _init(_self):
     paratope.extend(_self)
     aggrescan.extend(_self)
     modify.extend(_self)
+    labels.extend(_self)
     lighting.extend(_self)
     missing.install(_self)  # "load" keeps PDB REMARK 465 residues
     unsaved.install(_self)  # saving or opening a session: nothing unsaved

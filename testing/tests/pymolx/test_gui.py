@@ -12,11 +12,13 @@ import pytest
 from pymol import cmd
 
 try:
-    from pymol.Qt import QtGui, QtWidgets
+    from pymol.Qt import QtCore, QtGui, QtWidgets
 except ImportError:
     pytest.skip('no Qt', allow_module_level=True)
 
-from pymolx.gui import menus, theme, toolbar
+import shiboken6
+
+from pymolx.gui import menus, plugin_menu, theme, toolbar
 
 
 @pytest.fixture(scope='module')
@@ -189,15 +191,20 @@ def test_colored_labels_are_drawn(app):
 
 def test_toolbar_buttons(window):
     # select tool, selection level | undo redo | zoom all, zoom selection
-    # | presets ... (the drawn buttons paint their own label, so no text)
+    # | presets, labels | plugins | mouse mode | wizard | sequence,
+    # timeline, output ... (the drawn buttons paint their own label, so
+    # no text)
     bar = window.toolbar
     assert [b.text() for b in toolbar_buttons(window)] == [
-        '', '', '', '', '', '', '',
+        '', '', '', '', '', '', '', '', '', '', '', '', '', '',
         'Builder...', 'Scenes', 'Draw/Ray', '\u2022\u2022\u2022']
-    assert toolbar_buttons(window)[:7] == [
+    assert toolbar_buttons(window)[:14] == [
         bar.select_button, bar.selection_mode_button,
         bar.undo_button, bar.redo_button,
-        bar.zoom_all_button, bar.zoom_selection_button, bar.presets_button]
+        bar.zoom_all_button, bar.zoom_selection_button, bar.presets_button,
+        bar.labels_button,
+        bar.plugins_button, bar.mouse_button, bar.wizard_button,
+        bar.seq_button, bar.timeline_button, bar.command_button]
     assert bar.selection_mode_button.letter == 'R'
     # + and - sit between the arrow and the level, stacked in a column
     column = bar.add_button_plus.parent()
@@ -206,10 +213,11 @@ def test_toolbar_buttons(window):
         ('+', '\u2212')
     # every button in the left half is an icon (or the level's letter)
     # over a caption, so each one fills the bar's height
-    assert [b.caption for b in toolbar_buttons(window)[:7]] == [
+    assert [b.caption for b in toolbar_buttons(window)[:14]] == [
         'SELECT', 'RESIDUES', 'UNDO', 'REDO', 'ZOOM ALL', 'ZOOM SEL',
-        'PRESETS']
-    for btn in toolbar_buttons(window)[:7]:
+        'PRESETS', 'LABELS', 'PLUGINS', '3-BUTTON VIEWING', 'WIZARD',
+        'SEQUENCE', 'TIMELINE', 'OUTPUT']
+    for btn in toolbar_buttons(window)[:14]:
         assert btn.sizeHint().height() == bar.presets_button.sizeHint().height()
         assert not btn.grab().isNull()      # they paint
 
@@ -333,6 +341,198 @@ def test_presets(window):
         assert one in labels
     actions(menu)['ball and stick'].trigger()
     assert cmd.count_atoms('rep spheres') > 0
+
+
+def test_plugin_groups():
+    # the labels the plugins give themselves, as the Plugin menu has them
+    startup = os.path.join(os.path.dirname(__file__), '..', '..', '..',
+                           'data', 'startup')
+    labels = []
+    for name in sorted(os.listdir(startup)):
+        path = os.path.join(startup, name, '__init__.py')
+        if os.path.exists(path):
+            with open(path) as handle:
+                labels += re.findall(r"addmenuitem(?:qt)?\('([^']+)'",
+                                     handle.read())
+    assert len(labels) >= 16
+    groups, last = plugin_menu.grouped(
+        ['Plugin Manager'] + labels + ['Somebody Else\'s Tool'])
+    assert groups == [
+        ('Sequence Tools', ['Sequence Comparison', 'Modify Sequences']),
+        ('Structure Tools', [
+            'Structure Comparison', 'Structure Prediction',
+            'Structure Preparation', 'Interface Analysis (PISA-like)',
+            'Alignment/Superposition']),
+        ('Clustering', ['RMSD Clustering', 'Interface RMSD Clustering']),
+        ('Antibody Tools', ['Antibody Builder', 'CDR Loops',
+                            'Epitope Prediction', 'Paratope Prediction']),
+        ('Ligand Tools', ['Binding Pocket']),
+        ('Physicochemical Tools', ['Aggregation Prediction',
+                                   'APBS Electrostatics']),
+        ('Miscellaneous', ['Lighting Settings', 'Somebody Else\'s Tool']),
+    ]
+    assert last == ['Plugin Manager']
+    # every name in a group is a plugin there is (no misspelt label)
+    for _heading, names in plugin_menu.GROUPS:
+        assert set(names) <= set(labels)
+    # a group nothing is installed of is left out
+    assert plugin_menu.grouped(['Binding Pocket']) == (
+        [('Ligand Tools', ['Binding Pocket'])], [])
+    assert plugin_menu.grouped([]) == ([], [])
+
+
+def test_plugins_button(window):
+    btn = window.toolbar.plugins_button
+    assert btn.caption == 'PLUGINS'
+    assert btn.glyph is not None and not btn.glyph.isNull()
+    assert btn.toolTip() == 'Open a plugin'
+    assert not btn.grab().isNull()
+    menu = btn.menu()
+    # a window without a Plugin menu: said, not an empty list
+    menu.aboutToShow.emit()
+    assert [a.text() for a in menu.actions()] == ['No plugins']
+    assert not menu.actions()[0].isEnabled()
+
+    # the Plugin menu as PyMOLQtGUI.initializePlugins sets it up
+    opened = []
+    plugin = QtWidgets.QMenu('Plugin', window)
+    plugin.addAction('Plugin Manager', lambda: opened.append('manager'))
+    plugin.addSeparator()
+    legacy = QtWidgets.QMenu('Legacy Plugins', plugin)
+    plugin.addMenu(legacy)
+    plugin.addSeparator()
+    for label in ('Lighting Settings', 'CDR Loops', 'Binding Pocket',
+                  'RMSD Clustering', 'Antibody Builder'):
+        plugin.addAction(label, lambda label=label: opened.append(label))
+    legacy.addAction('Old Tool', lambda: opened.append('Old Tool'))
+    window.menudict = {'PluginQt': plugin, 'Plugin': legacy}
+
+    def listed():
+        return [None if a.isSeparator() else a.text()
+                for a in menu.actions()]
+
+    menu.aboutToShow.emit()
+    assert listed() == [
+        'Clustering', 'RMSD Clustering', None,
+        'Antibody Tools', 'Antibody Builder', 'CDR Loops', None,
+        'Ligand Tools', 'Binding Pocket', None,
+        'Miscellaneous', 'Old Tool', 'Lighting Settings', None,
+        'Plugin Manager']
+    # the headings cannot be clicked; the entries open their plugin
+    assert [a.text() for a in menu.actions() if not a.isEnabled()
+            and not a.isSeparator()] == ['Clustering', 'Antibody Tools',
+                                         'Ligand Tools', 'Miscellaneous']
+    actions(menu)['CDR Loops'].trigger()
+    actions(menu)['Old Tool'].trigger()
+    actions(menu)['Plugin Manager'].trigger()
+    assert opened == ['CDR Loops', 'Old Tool', 'manager']
+
+    # a plugin installed since is there the next time, and showing the
+    # list again does not take the entries out of the Plugin menu
+    plugin.addAction('Paratope Prediction', lambda: None)
+    menu.aboutToShow.emit()
+    assert listed()[3:8] == ['Antibody Tools', 'Antibody Builder',
+                             'CDR Loops', 'Paratope Prediction', None]
+    assert len(listed()) == 16
+    assert [a.text() for a in plugin.actions() if a.text()] == [
+        'Plugin Manager', 'Legacy Plugins', 'Lighting Settings',
+        'CDR Loops', 'Binding Pocket', 'RMSD Clustering',
+        'Antibody Builder', 'Paratope Prediction']
+    assert not menu.grab().isNull()
+
+    # before the plugins are loaded the Plugin menu only offers to
+    window.menudict = {'Plugin': QtWidgets.QMenu('Plugin', window)}
+    window.menudict['Plugin'].addAction('Initialize Plugin System')
+    menu.aboutToShow.emit()
+    assert listed() == ['Initialize Plugin System']
+
+
+def test_labels_button(window):
+    # opens the Labels window, the same one each time
+    from pymolx.gui import label_dialog
+    btn = window.toolbar.labels_button
+    assert btn.caption == 'LABELS' and btn.menu() is None
+    try:
+        btn.click()
+        dialog = label_dialog._dialog
+        assert isinstance(dialog, label_dialog.LabelDialog)
+        assert dialog.parent() is window and dialog.isVisible()
+        dialog.hide()
+        btn.click()
+        assert label_dialog._dialog is dialog and dialog.isVisible()
+    finally:
+        shiboken6.delete(label_dialog._dialog)
+        label_dialog._dialog = None
+
+
+def test_mouse_mode_button(window):
+    # the mode's name under the mouse, as the selection level's is under
+    # its letter; the menu is the mode list with the controls table
+    from pymolx.gui import mouse_modes
+    btn = window.toolbar.mouse_button
+    assert btn.caption == '3-BUTTON VIEWING'
+    assert isinstance(btn.menu(), mouse_modes.MouseModeMenu)
+    width = btn.sizeHint().width()
+    try:
+        for mode, name in mouse_modes.mode_names().items():
+            cmd.mouse(mode)
+            window.fire_setting_callbacks()
+            assert btn.caption == name.upper()
+            # wide enough for any mode: the buttons after it stay put
+            assert btn.sizeHint().width() == width
+            assert not btn.grab().isNull()
+    finally:
+        cmd.mouse('three_button_viewing')
+
+
+def test_toggle_buttons(app):
+    # the switches that were a strip under the content panel
+    cmd.reinitialize()
+    cmd.set('movie_panel', 0)       # as content_panel.setup leaves it
+    cmd.get_setting_updates()
+    win = StubWindow()
+    win.menudict = {'Wizard': QtWidgets.QMenu('Wizard', win)}
+    win.browser = QtWidgets.QPlainTextEdit()
+    win.lineedit = QtWidgets.QLineEdit()
+    frame = QtWidgets.QWidget()
+    layout = QtWidgets.QVBoxLayout(frame)
+    layout.addWidget(win.browser)
+    layout.addWidget(win.lineedit)
+    win.ext_window = QtWidgets.QDockWidget(win)
+    win.ext_window.setWidget(frame)
+    win.addDockWidget(QtCore.Qt.DockWidgetArea.BottomDockWidgetArea,
+                      win.ext_window)
+    bar = win.toolbar = toolbar.setup(win)
+    try:
+        # the Wizard menu is the menu bar's own
+        assert bar.wizard_button.menu() is win.menudict['Wizard']
+
+        # switches are pressed in while on, and show their "-on" icon
+        for btn in (bar.seq_button, bar.timeline_button,
+                    bar.command_button):
+            assert btn.isCheckable() and not btn.isChecked()
+        off = bar.timeline_button.grab().toImage()
+        bar.timeline_button.click()
+        assert cmd.get_setting_int('movie_panel') == 1
+        assert bar.timeline_button.grab().toImage() != off
+        # ... and follow the setting
+        cmd.set('movie_panel', 0)
+        win.fire_setting_callbacks()
+        assert not bar.timeline_button.isChecked()
+
+        # the output pane; the command line stays
+        bar.set_output_shown(False)
+        assert win.browser.isHidden() and not bar.command_button.isChecked()
+        bar.command_button.click()
+        assert not win.browser.isHidden()
+        assert not win.lineedit.isHidden()
+        bar.command_button.click()
+        assert win.browser.isHidden() and not win.lineedit.isHidden()
+        bar.set_output_shown(True)
+        assert not win.browser.isHidden() and bar.command_button.isChecked()
+    finally:
+        cmd.reinitialize()
+        shiboken6.delete(win)
 
 
 def test_zoom_buttons(window):

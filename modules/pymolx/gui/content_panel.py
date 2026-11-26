@@ -1,7 +1,8 @@
 '''
-Content panel (parity items L-14, L-15): Qt replacement for the OpenGL
-object panel, docked right of the viewer, with the toggle toolbar
-(mouse mode, wizards, sequence, timeline, command output) at its bottom.
+Content panel (parity item L-15): Qt replacement for the OpenGL
+object panel, docked right of the viewer. (The mouse mode, wizards,
+sequence, timeline and command output buttons Incentive PyMOL has at
+its bottom are in the main toolbar: pymolx.gui.toolbar.)
 
 Layout follows the Incentive PyMOL 3 main window. Rows show a dot (green
 when enabled), the name (selections in parentheses, as in the OpenGL
@@ -22,7 +23,6 @@ Qt = QtCore.Qt
 PANEL_WIDTH = 280
 OUTPUT_HEIGHT = 220
 SHOW_OUTPUT = False  # owner's choice: just the command line at startup
-QWIDGETSIZE_MAX = (1 << 24) - 1
 REFRESH_MS = 250
 
 COLUMNS = 'ASHLC'
@@ -339,109 +339,10 @@ class StateBar(QtWidgets.QFrame):
         button.blockSignals(False)
 
 
-class ToggleToolbar(QtWidgets.QToolBar):
-    '''
-    Bottom strip: mouse mode, wizards, sequence viewer, movie timeline,
-    command output.
-    '''
-
-    def __init__(self, window):
-        super().__init__('Toggles', window)
-        self.window = window
-        self.cmd = cmd = window.cmd
-        self.setObjectName('pymolx_toggles')
-        self.setIconSize(QtCore.QSize(16, 16))
-
-        # like Incentive PyMOL: mode name and its own arrow segment, all
-        # buttons separated by 1px dividers
-        self.mouse_button = self._button('', 'mouse',
-                                         'Mouse mode', self._mouse_menu())
-        self.mouse_button.setToolButtonStyle(
-            Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self.mouse_button.setPopupMode(
-            QtWidgets.QToolButton.ToolButtonPopupMode.MenuButtonPopup)
-        self.mouse_button.setProperty('split', True)
-        self.mouse_button.clicked.connect(self.mouse_button.showMenu)
-        window.setting_callbacks[cmd.setting._get_index(
-            'button_mode_name')].append(self._update_mouse_mode)
-        self._update_mouse_mode(cmd.get('button_mode_name'))
-        self.addSeparator()
-
-        self._button('', 'wand', 'Wizards', window.menudict.get('Wizard'))
-        self.addSeparator()
-
-        # pymolx.gui.sequence_viewer connects it
-        self.seq_button = self._button('SEQ', None, 'Sequence viewer')
-        self.seq_button.setCheckable(True)
-        self.addSeparator()
-        self.timeline_button = self._setting_toggle(
-            '', 'timeline', 'movie_panel', 'Movie timeline')
-        self.addSeparator()
-
-        self.command_button = self._button('', 'terminal',
-                                           'Show or hide the command output')
-        self.command_button.setCheckable(True)
-        self.command_button.setChecked(not window.browser.isHidden())
-        self.command_button.toggled.connect(self.toggle_output)
-
-    def _button(self, text, icon_name, tooltip, menu=None):
-        btn = QtWidgets.QToolButton(self)
-        btn.setText(text)
-        if icon_name:
-            btn.setIcon(icon(self.cmd, icon_name))
-        btn.setToolTip(tooltip)
-        if menu is not None:
-            btn.setMenu(menu)
-            btn.setPopupMode(
-                QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
-        self.addWidget(btn)
-        return btn
-
-    def _setting_toggle(self, text, icon_name, setting, tooltip):
-        cmd = self.cmd
-        btn = self._button(text, icon_name, tooltip)
-        btn.setCheckable(True)
-        btn.clicked.connect(lambda checked: cmd.set(setting, int(checked),
-                                                    log=1, quiet=0))
-
-        def update(value):
-            btn.blockSignals(True)
-            btn.setChecked(bool(value))
-            btn.blockSignals(False)
-
-        self.window.setting_callbacks[cmd.setting._get_index(setting)].append(
-            update)
-        update(cmd.get_setting_int(setting))
-        return btn
-
-    def _mouse_menu(self):
-        from .mouse_modes import MouseModeMenu
-        return MouseModeMenu(self.cmd, self)
-
-    def _update_mouse_mode(self, name):
-        self.mouse_button.setText(name or 'Mouse')
-
-    def toggle_output(self, visible):
-        '''
-        Show or hide the output pane; the command line stays.
-        '''
-        window = self.window
-        window.browser.setVisible(visible)
-        dock = window.ext_window
-        frame = dock.widget()
-        frame.layout().activate()
-        if visible:
-            dock.setMaximumHeight(QWIDGETSIZE_MAX)
-            window.resizeDocks([dock], [frame.sizeHint().height()],
-                               Qt.Orientation.Vertical)
-        else:
-            # just the command line, no empty space above it
-            dock.setMaximumHeight(frame.minimumSizeHint().height())
-
-
 class ContentPanel(QtWidgets.QWidget):
     '''
-    Object rows (refreshed from pymolx.panel) plus the toggle toolbar.
+    Object rows (refreshed from pymolx.panel), with the wizard panel
+    and the state bar under them.
     '''
 
     def __init__(self, window):
@@ -475,20 +376,10 @@ class ContentPanel(QtWidgets.QWidget):
         self.state_bar = StateBar(self.cmd, self)
         layout.addWidget(self.state_bar)
 
-        self.toggles = ToggleToolbar(window)
-        layout.addWidget(self.toggles)
-
         self.timer = QtCore.QTimer(self)
         self.timer.timeout.connect(self.refresh)
         self.timer.start(REFRESH_MS)
         self.refresh()
-
-    def minimumSizeHint(self):
-        # always wide enough for the whole toggle toolbar
-        hint = super().minimumSizeHint()
-        return QtCore.QSize(
-            max(hint.width(), self.toggles.sizeHint().width() + 2),
-            hint.height())
 
     def row_widgets(self):
         return [self.rows_layout.itemAt(i).widget()
@@ -542,7 +433,6 @@ def setup(window):
     window.setCorner(Qt.Corner.BottomRightCorner,
                      Qt.DockWidgetArea.BottomDockWidgetArea)
     window.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
-    # wide enough for the whole toggle toolbar
     width = PANEL_WIDTH
     window.resizeDocks([dock], [width], Qt.Orientation.Horizontal)
 
@@ -554,14 +444,18 @@ def setup(window):
         window.resizeDocks([window.ext_window], [OUTPUT_HEIGHT],
                            Qt.Orientation.Vertical)
 
-    # output pane hidden until toggled (">_"); the command line stays and
-    # the viewer gets the space
-    content.toggles.command_button.setChecked(SHOW_OUTPUT)
+    # output pane hidden until toggled (the toolbar's Output button); the
+    # command line stays and the viewer gets the space
+    window.toolbar.set_output_shown(SHOW_OUTPUT)
 
-    # the window was sized for the OpenGL panel (220 pixels, if shown)
+    # the window was sized for the OpenGL panel (220 pixels, if shown);
+    # it is also at least as wide as the toolbar, or the buttons at its
+    # right end would start out in the overflow menu (the viewer gets
+    # the extra width; an explicit "pymol -W" still has the last word)
     import pymol.invocation
     reserved = 220 if pymol.invocation.options.internal_gui else 0
-    window.resize(window.width() + width - reserved, window.height())
+    window.resize(max(window.width() + width - reserved,
+                      window.toolbar.sizeHint().width()), window.height())
     return content
 
 

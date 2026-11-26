@@ -48,17 +48,45 @@ class Heatmap(QtWidgets.QWidget):
         self.result = None
         self.order = []
         self.top = 1.0
+        self.image = None       # the matrix, a pixel per pair of models
+        self._pixels = None     # (its memory)
 
     def set_result(self, result):
         self.result = result
         self.order = []
+        index = {m: i for i, m in enumerate(result.models)}
         for c in result.clusters:
             first = [c['representative']] if c['representative'] else []
             members = first + [
                 m for m in c['members'] if m != c['representative']]
-            self.order += [result.models.index(m) for m in members]
+            self.order += [index[m] for m in members]
         self.top = max(float(result.matrix.max()), 1e-6)
+        self._render()
         self.update()
+
+    def _render(self):
+        '''
+        The colored matrix as an image, painted scaled: a rectangle per
+        pair takes seconds per repaint with a few hundred models
+        '''
+        import numpy as np
+        n = len(self.order)
+        self.image = self._pixels = None
+        if not n:
+            return
+        order = np.array(self.order)
+        fraction = (self.result.matrix[np.ix_(order, order)] /
+                    self.top)[:, :, None]
+        low, mid, high = (np.array(QtGui.QColor(theme.COLORS[k]).getRgb()[:3],
+                                   dtype=float)
+                          for k in ('heat_low', 'heat_mid', 'heat_high'))
+        rgb = np.where(fraction < 0.5,
+                       low + (mid - low) * (fraction * 2),
+                       mid + (high - mid) * (fraction * 2 - 1))
+        self._pixels = np.ascontiguousarray(
+            np.clip(np.round(rgb), 0, 255).astype(np.uint8))
+        self.image = QtGui.QImage(self._pixels.data, n, n, 3 * n,
+                                  QtGui.QImage.Format.Format_RGB888)
 
     def sizeHint(self):
         return QtCore.QSize(320, 320)
@@ -68,27 +96,14 @@ class Heatmap(QtWidgets.QWidget):
         side = min(self.width(), self.height())
         return side / n if n else 0
 
-    @staticmethod
-    def _color(fraction):
-        low, mid, high = (QtGui.QColor(theme.COLORS[k]) for k in (
-            'heat_low', 'heat_mid', 'heat_high'))
-        a, b, t = (low, mid, fraction * 2) if fraction < 0.5 else \
-            (mid, high, fraction * 2 - 1)
-        return QtGui.QColor(*(round(x + (y - x) * t) for x, y in zip(
-            a.getRgb()[:3], b.getRgb()[:3])))
-
     def paintEvent(self, event):
         painter = QtGui.QPainter(self)
         painter.fillRect(self.rect(), QtGui.QColor(theme.COLORS['base']))
         if not self.result or not self.order:
             return
         cell = self._cell()
-        matrix = self.result.matrix
-        for row, i in enumerate(self.order):
-            for col, j in enumerate(self.order):
-                painter.fillRect(QtCore.QRectF(col * cell, row * cell,
-                                               cell + 0.5, cell + 0.5),
-                                 self._color(matrix[i, j] / self.top))
+        side = len(self.order) * cell
+        painter.drawImage(QtCore.QRectF(0, 0, side, side), self.image)
         pen = QtGui.QPen(QtGui.QColor(theme.COLORS['text']))
         pen.setWidthF(1.0)
         painter.setPen(pen)
@@ -443,8 +458,8 @@ class ClusterDialog(QtWidgets.QDialog):
         clusters = self.result.clusters
         self.table.blockSignals(True)
         self.table.setRowCount(len(clusters))
+        short = cluster.short_names(self.result.models)
         for row, c in enumerate(clusters):
-            short = cluster.short_names(self.result.models)
             alone = c.get('unclustered')
             values = [cluster.cluster_label(c), str(c['size']),
                       '-' if alone else '%.2f A' % c['mean_rmsd'],

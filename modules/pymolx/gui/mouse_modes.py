@@ -1,6 +1,6 @@
 '''
 Mouse mode menu with a mouse controls table, like Incentive PyMOL: the
-mode list (current mode checked) and, attached to its left, the button
+mode list (current mode checked) and, attached to its side, the button
 assignments of the current or hovered mode.
 
 The table is built from pymol.controlling.mode_dict, so it shows what
@@ -77,6 +77,22 @@ def controls_table(mode):
             action = bindings.get((button, modifier))
             table[(row, column)] = action_label(action) if action else ''
     return table
+
+
+def table_left(menu, width, screen):
+    '''
+    Where the controls table goes: flush with the menu's left edge, or
+    with its right edge if the screen has no room for it on the left.
+
+    :param menu: the menu's QRect
+    :param width: the table's width
+    :param screen: the screen's QRect
+    :return: x of the table's left edge
+    '''
+    left = menu.left() - width + 1
+    if left < screen.left():
+        left = menu.right()
+    return left
 
 
 class ControlsPanel(QtWidgets.QFrame):
@@ -184,11 +200,13 @@ class MouseModeMenu(QtWidgets.QMenu):
 
     def showEvent(self, event):
         super().showEvent(event)
-        # attach the table to the left of the menu, same height
+        # attach the table to the left of the menu, same height (to its
+        # right where the screen ends before the table would)
         geometry = self.geometry()
         self.panel.adjustSize()
         width = self.panel.sizeHint().width()
-        self.panel.setGeometry(geometry.left() - width + 1, geometry.top(),
-                               width, geometry.height())
+        self.panel.setGeometry(
+            table_left(geometry, width, self.screen().availableGeometry()),
+            geometry.top(), width, geometry.height())
         self.panel.show()
         self.panel.raise_()

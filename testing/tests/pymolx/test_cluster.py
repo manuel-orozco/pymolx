@@ -525,6 +525,149 @@ def test_one_undo_step():
         cmd.undo_disable()
 
 
+def test_models_read_in_one_pass():
+    names = touching_models()
+    cmd.remove('model_2 and chain A and resi 5-8')
+    cmd.remove('model_3 and chain H and resi 10 and not name CA')
+    cmd.fab('ACDEF', 'bystander', chain='A')
+    antigens = cluster.read_sides(names, 'chain A', 1, ('CA',))
+    antibodies = cluster.read_sides(names, 'chain H+L')
+    assert list(antigens) == names and 'bystander' not in antigens
+    for name in names:
+        side = antigens[name]
+        # the heavy atoms, in PyMOL's order, each with its residue
+        assert np.allclose(side.xyz, cmd.get_coords(
+            '%s and chain A and not hydro' % name))
+        residues = []
+        cmd.iterate('%s and chain A and not hydro' % name,
+                    'residues.append((chain, resi))',
+                    space={'residues': residues})
+        assert [side.residues[k] for k in side.residue] == residues
+        # the atoms to compare: its alpha carbons
+        assert len(side.keys) == cmd.count_atoms(
+            '%s and chain A and name CA' % name)
+        assert np.allclose(side.coords, cmd.get_coords(
+            '%s and chain A and name CA' % name))
+        assert all(key[2] == 'CA' for key in side.keys)
+        # the contacts are those PyMOL finds, both ways
+        assert cluster.close_residues(side, antibodies[name]) == \
+            cluster.contact_residues(name, 'chain A', 'chain H+L', 1)
+        assert cluster.close_residues(antibodies[name], side, 8.0) == \
+            cluster.contact_residues(name, 'chain H+L', 'chain A', 1, 8.0)
+    assert antibodies[names[0]].coords is antibodies[names[0]].xyz
+    # nothing of the selection in a model: an empty side, no contacts
+    empty = cluster.read_sides(names, 'chain Z')[names[0]]
+    assert len(empty.xyz) == 0 and empty.keys == []
+    assert cluster.close_residues(empty, antibodies[names[0]]) == set()
+    # atoms only some models have are left out, the rest matched
+    keys, xyz = cluster.matched_atoms(
+        [(antigens[n].keys, antigens[n].coords) for n in names])
+    assert xyz.shape == (len(names), len(keys), 3)
+    assert len(keys) == len(ANTIGEN) - 4
+    assert not any(resi in ('5', '6', '7', '8') for _, resi, _ in keys)
+    for n, name in enumerate(names):
+        row = dict(zip(antigens[name].keys, antigens[name].coords))
+        assert all(np.array_equal(xyz[n, k], row[key])
+                   for k, key in enumerate(keys))
+    both, joined = cluster.joined(antigens[names[2]], antibodies[names[2]],
+                                  {('H', '10'), ('A', '3')})
+    assert sorted(both) == [('A', '3', 'CA'), ('H', '10', 'CA')]
+    assert joined.shape == (2, 3)
+
+
+def test_matrices_as_pair_by_pair():
+    rng = np.random.default_rng(5)
+    n, atoms = 23, 40
+    base = rng.normal(size=(atoms, 3)) * 12 + [60, -30, 90]
+    fit = base + rng.normal(size=(n, atoms, 3)) * rng.uniform(
+        0, 2, size=(n, 1, 1))
+    measure = rng.normal(size=(n, 17, 3)) * 20
+    fit[4], measure[4] = fit[2], measure[2]     # the same model twice
+    slow = np.zeros((n, n))
+    for i in range(n):
+        for j in range(i + 1, n):
+            turn, shift = cluster.kabsch(fit[j], fit[i])
+            moved = measure[j] @ turn.T + shift
+            slow[i, j] = slow[j, i] = np.sqrt(
+                ((moved - measure[i]) ** 2).sum(axis=1).mean())
+    fast = cluster.rmsd_matrix(list(fit), list(measure))
+    assert np.allclose(fast, slow, rtol=0, atol=1e-10)
+    assert fast[2, 4] < 1e-10 and np.array_equal(fast, fast.T)
+    assert cluster.rmsd_matrix(fit[:1], measure[:1]).tolist() == [[0.0]]
+    # a few models at a time gives the same
+    whole = cluster.BATCH
+    cluster.BATCH = 3 * 17 * 4
+    try:
+        assert cluster.batches(1, 11, 17) == [(1, 5), (5, 9), (9, 11)]
+        assert np.allclose(cluster.rmsd_matrix(fit, measure), slow,
+                           rtol=0, atol=1e-10)
+    finally:
+        cluster.BATCH = whole
+    # a reflection is not a rotation
+    mirrored = fit[0] * [1, 1, -1]
+    turn = cluster.rotations((mirrored - mirrored.mean(axis=0))[None],
+                             fit[0] - fit[0].mean(axis=0))[0]
+    assert np.linalg.det(turn) == pytest.approx(1)
+    assert np.allclose(turn, cluster.kabsch(mirrored, fit[0])[0])
+
+    sets = [set(rng.choice(30, size=rng.integers(0, 12), replace=False))
+            for _ in range(n)]
+    sets[3], sets[6], sets[7] = set(), set(), set(sets[1])
+    slow = np.array([[0.0 if i == j else
+                      1.0 - len(a & b) / len(a | b) if a | b else 1.0
+                      for j, b in enumerate(sets)]
+                     for i, a in enumerate(sets)])
+    assert np.array_equal(cluster.jaccard_matrix(sets), slow)
+
+    def gromos(matrix, cutoff):     # (as Daura et al. describe it)
+        left, labels, number = set(range(len(matrix))), {}, 0
+        while left:
+            members = sorted(left)
+            counts = [sum(matrix[i, j] <= cutoff for j in members)
+                      for i in members]
+            center = members[counts.index(max(counts))]
+            for j in members:
+                if matrix[center, j] <= cutoff:
+                    labels[j] = number
+                    left.discard(j)
+            number += 1
+        return [labels[i] for i in range(len(matrix))]
+
+    for cutoff in (0.0, 0.8, 1.5, 2.5, 100.0):
+        assert cluster.gromos(fast, cutoff) == gromos(fast, cutoff)
+    assert cluster.gromos(np.zeros((0, 0)), 1.0) == []
+
+
+def test_many_models_take_seconds():
+    '''
+    The time grows with the number of models, not with its square (as it
+    did when PyMOL was asked about one model after the other)
+    '''
+    import time
+    names = touching_models(((0, 2), (120, 2)))
+    for copy in range(60):
+        cmd.create('copy_%02d' % copy, names[copy % 4])
+    start = time.time()
+    result = cluster.compute('model_* copy_*', 'chain A', 'chain H+L')
+    cluster.apply(result)
+    elapsed = time.time() - start
+    assert sorted(c['size'] for c in result.clusters) == [32, 32]
+    # (a tenth of this here; a minute before)
+    assert elapsed < 10
+    # moved as coordinates: the objects keep no matrix of their own
+    assert cmd.get_object_matrix('copy_07') == (
+        1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0,
+        0.0, 0.0, 0.0, 1.0)
+    spread = np.ptp([cmd.get_coords('%s and chain A and name CA' % m)
+                     for m in result.models], axis=0)
+    assert spread.max() < 1e-2      # all on one antigen
+    colors = set()
+    cmd.iterate('chain H+L and elem C', 'colors.add(color)',
+                space={'colors': colors})
+    assert colors == {cmd.get_color_index(c)
+                      for c in cluster.CLUSTER_COLORS[:2]}
+
+
 def test_dialog(tmp_path):
     dialog_tmp = tmp_path
     QtWidgets = pytest.importorskip('pymol.Qt').QtWidgets

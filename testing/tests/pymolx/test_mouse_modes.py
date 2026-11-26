@@ -46,6 +46,23 @@ def test_controls_table_viewing():
     assert ('Single Click', 'Wheel') not in table
 
 
+def test_table_beside_the_menu():
+    # the table hangs on the menu's left, or on its right where the
+    # screen ends first (the menu now drops from the toolbar, which can
+    # be near the screen's left edge)
+    pytest.importorskip('pymol.Qt')
+    from pymol.Qt import QtCore
+    screen = QtCore.QRect(0, 0, 1920, 1080)
+    menu = QtCore.QRect(700, 80, 184, 315)
+    assert mouse_modes.table_left(menu, 321, screen) == 700 - 321 + 1
+    menu = QtCore.QRect(200, 80, 184, 315)
+    assert mouse_modes.table_left(menu, 321, screen) == menu.right()
+    # a second screen to the right starts at its own left edge
+    screen = QtCore.QRect(1920, 0, 1920, 1080)
+    menu = QtCore.QRect(2100, 80, 184, 315)
+    assert mouse_modes.table_left(menu, 321, screen) == menu.right()
+
+
 def test_controls_table_matches_bindings():
     # every drag binding of every menu mode is in its table
     from pymol import controlling

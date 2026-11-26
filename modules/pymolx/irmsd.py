@@ -48,11 +48,12 @@ SCOPES = {
 DEFAULT_SCOPE = 'pair'
 DEFAULT_ATOMS = 'backbone'      # CAPRI's choice
 MIN_SIZE = 1
+# A: pairs closer than this are measured atom by atom (irmsd_matrix)
+EXACT_BELOW = 0.01
 # fewer atoms than this cannot be superimposed
 MIN_ATOMS = 3
 # the atoms compared, by name (the keys of cluster.ATOMS); None: all heavy
-ATOM_NAMES = {'ca': ('CA',), 'backbone': ('N', 'CA', 'C', 'O'),
-              'heavy': None}
+ATOM_NAMES = cluster.ATOM_NAMES
 
 
 def capri_class(value):
@@ -79,46 +80,6 @@ def interface_residues(obj, side, other, state=1, distance=INTERFACE,
                                      _self=_self))
 
 
-def heavy_atoms(models, selection, state=1, _self=cmd):
-    '''
-    The heavy atoms of a selection in each model, read in one pass.
-    (Asking PyMOL model by model means a pass over every atom of the
-    session each time, and a "within" on top for the interface: with 100
-    models that was most of a minute, against a second this way.)
-
-    :return: {model: {(chain, resi, name): (x, y, z)}}
-    '''
-    found = {m: {} for m in models}
-
-    def add(model, chain, resi, name, x, y, z):
-        atoms = found.get(model)
-        if atoms is not None:
-            atoms[(chain, resi, name)] = (x, y, z)
-
-    _self.iterate_state(state, '(%s) and not hydro and present' % selection,
-                        'add(model, chain, resi, name, x, y, z)',
-                        space={'add': add})
-    return found
-
-
-def close_residues(side, other, distance=INTERFACE):
-    '''
-    The residues of "side" with an atom within "distance" of an atom of
-    "other"
-
-    :param side, other: {(chain, resi, name): (x, y, z)}
-    :return: {(chain, resi)}
-    '''
-    import numpy as np
-    from scipy.spatial import cKDTree
-    if not side or not other:
-        return set()
-    keys = list(side)
-    nearest, _ = cKDTree(np.array(list(other.values()))).query(
-        np.array([side[k] for k in keys]), distance_upper_bound=distance)
-    return {keys[i][:2] for i in np.flatnonzero(np.isfinite(nearest))}
-
-
 def irmsd(first, second):
     '''
     The RMSD of two sets of matched atoms after their best superposition
@@ -131,6 +92,35 @@ def irmsd(first, second):
     return float(np.sqrt(((moved - first) ** 2).sum(axis=1).mean()))
 
 
+def _pair_rows(xyz, masks, i, others):
+    '''
+    The i-RMSD of model i to each of "others" (indices), each pair over
+    the atoms that are interface in either: superimposed and measured
+    atom by atom
+
+    :return: array (others)
+    '''
+    import numpy as np
+    out = np.zeros(len(others))
+    for start, stop in cluster.batches(0, len(others), masks.shape[1]):
+        rows = others[start:stop]
+        # (atoms outside a pair's interface weigh nothing)
+        use = (masks[rows] | masks[i])[:, :, None]
+        counts = use.sum(axis=(1, 2))
+        mobile = np.where(use, xyz[rows], 0.0)
+        target = np.where(use, xyz[i], 0.0)
+        mobile -= np.where(
+            use, (mobile.sum(axis=1) / counts[:, None])[:, None, :], 0.0)
+        target -= np.where(
+            use, (target.sum(axis=1) / counts[:, None])[:, None, :], 0.0)
+        rotation = cluster.rotations(mobile, target)
+        moved = mobile @ rotation.transpose(0, 2, 1)
+        moved -= target
+        out[start:stop] = np.sqrt(
+            np.einsum('jak,jak->j', moved, moved) / counts)
+    return out
+
+
 def irmsd_matrix(xyz, masks, scope=DEFAULT_SCOPE):
     '''
     :param xyz: array (models, atoms, 3), the same atoms in each model
@@ -140,16 +130,73 @@ def irmsd_matrix(xyz, masks, scope=DEFAULT_SCOPE):
         and the most atoms a pair was compared over)
     '''
     import numpy as np
+    xyz = np.asarray(xyz, dtype=float)
+    masks = np.asarray(masks, dtype=bool)
     n = len(xyz)
+    if n < 2:
+        return np.zeros((n, n)), (0, 0)
+    # only atoms that are interface in some model can count
+    shared = masks.any(axis=0)
+    xyz, masks = xyz[:, shared], masks[:, shared]
+    if scope == 'all':
+        # the same atoms for every pair
+        count = xyz.shape[1]
+        return cluster.rmsd_matrix(xyz, xyz), (count, count)
+
+    # All pairs at once. A pair (i, j) is compared over the atoms in
+    # mask i or mask j, and a sum over those is the sum over i's, plus
+    # the sum over j's, minus the sum over the atoms in both: each of
+    # them a product of two (models x atoms) matrices. From the sums
+    # come each pair's centroids, the 3 x 3 matrix that Kabsch's method
+    # takes apart, and the RMSD itself (the summed squares less twice
+    # the singular values), without a pair of structures ever being
+    # laid on each other.
+    x = xyz - xyz.reshape(-1, 3).mean(axis=0)   # (smaller numbers)
+    m = masks.astype(float)
+    axes = [x[:, :, k] for k in range(3)]
+    masked = [m * axis for axis in axes]
+
+    def over_pairs(values, in_mask):
+        # [i, j]: the sum of model j's values over the atoms of pair
+        # (i, j); in_mask is m * values
+        return m @ values.T + in_mask.sum(axis=1)[None, :] - m @ in_mask.T
+
+    own = m.sum(axis=1)
+    counts = own[:, None] + own[None, :] - m @ m.T
+    # [i, j, k]: the sum of coordinate k of model j, then of model i
+    sum_j = np.stack([over_pairs(axes[k], masked[k]) for k in range(3)],
+                     axis=2)
+    sum_i = sum_j.transpose(1, 0, 2)
+    squares = (x * x).sum(axis=2)
+    square_j = over_pairs(squares, m * squares)
+    spread = square_j + square_j.T - (
+        (sum_j * sum_j).sum(axis=2) + (sum_i * sum_i).sum(axis=2)) / counts
+    rows, columns = np.triu_indices(n, 1)
+    # [pair, k, l]: coordinate k of the later model (j, the one moved)
+    # times coordinate l of the earlier one (i), summed over the atoms
+    h = np.empty((len(rows), 3, 3))
+    for k in range(3):
+        for l in range(3):
+            cross = masked[l] @ axes[k].T + axes[l] @ masked[k].T - \
+                masked[l] @ masked[k].T
+            h[:, k, l] = cross[rows, columns]
+    h -= sum_j[rows, columns][:, :, None] * sum_i[rows, columns][:, None, :] \
+        / counts[rows, columns][:, None, None]
+    u, s, vt = np.linalg.svd(h)
+    s[:, 2] *= np.sign(np.linalg.det(u) * np.linalg.det(vt))
+    squared = (spread[rows, columns] - 2.0 * s.sum(axis=1)) / \
+        counts[rows, columns]
+    values = np.sqrt(np.maximum(squared, 0.0))
     matrix = np.zeros((n, n))
-    shared = masks.any(axis=0) if scope == 'all' else None
-    counts = []
-    for i in range(n):
-        for j in range(i + 1, n):
-            use = shared if shared is not None else masks[i] | masks[j]
-            counts.append(int(use.sum()))
-            matrix[i, j] = matrix[j, i] = irmsd(xyz[i][use], xyz[j][use])
-    return matrix, (min(counts), max(counts)) if counts else (0, 0)
+    matrix[rows, columns] = matrix[columns, rows] = values
+    # A difference of large sums says little about a pair of (nearly)
+    # the same structure: those are superimposed and measured.
+    for i in np.unique(rows[values < EXACT_BELOW]):
+        others = np.flatnonzero(matrix[i, i + 1:] < EXACT_BELOW) + i + 1
+        matrix[i, others] = matrix[others, i] = _pair_rows(
+            xyz, masks, i, others)
+    compared = counts[rows, columns]
+    return matrix, (int(round(compared.min())), int(round(compared.max())))
 
 
 def compute(objects='', antigen='', antibody='', atoms=DEFAULT_ATOMS,
@@ -190,21 +237,21 @@ def compute(objects='', antigen='', antibody='', atoms=DEFAULT_ATOMS,
                          'in %s)' % models[0])
     state = int(state)
 
-    antigens = heavy_atoms(models, antigen, state, _self)
-    antibodies = heavy_atoms(models, antibody, state, _self)
-    names = ATOM_NAMES[atoms]
-    found = [{key: xyz for side in (antigens[m], antibodies[m])
-              for key, xyz in side.items() if not names or key[2] in names}
-             for m in models]
-    keys = sorted(set.intersection(*(set(a) for a in found)))
+    # (both sides of every model, each read in one pass)
+    antigens = cluster.read_sides(models, antigen, state, ATOM_NAMES[atoms],
+                                  _self)
+    antibodies = cluster.read_sides(models, antibody, state,
+                                    ATOM_NAMES[atoms], _self)
+    keys, xyz = cluster.matched_atoms(
+        [cluster.joined(antigens[m], antibodies[m]) for m in models])
     if len(keys) < MIN_ATOMS:
         raise ValueError('fewer than %d %s atoms of "%s" and "%s" common '
                          'to all structures' % (MIN_ATOMS, atoms, antigen,
                                                 antibody))
-    epitopes = [close_residues(antigens[m], antibodies[m], distance)
+    epitopes = [cluster.close_residues(antigens[m], antibodies[m], distance)
                 for m in models]
-    interfaces = [epitope | close_residues(antibodies[m], antigens[m],
-                                           distance)
+    interfaces = [epitope | cluster.close_residues(antibodies[m],
+                                                   antigens[m], distance)
                   for m, epitope in zip(models, epitopes)]
     residues = [key[:2] for key in keys]
     masks = np.array([[r in interface for r in residues]
@@ -220,8 +267,7 @@ def compute(objects='', antigen='', antibody='', atoms=DEFAULT_ATOMS,
     interfaces = [i for i, ok in zip(interfaces, touching) if ok]
     epitopes = [e for e, ok in zip(epitopes, touching) if ok]
     masks = masks[touching]
-    xyz = np.array([[a[k] for k in keys]
-                    for a, ok in zip(found, touching) if ok])
+    xyz = xyz[touching]
 
     matrix, compared = irmsd_matrix(xyz, masks, scope)
     labels = cluster.gromos(matrix, cutoff) if method == 'gromos' else \

@@ -31,13 +31,16 @@ from pymol import cmd
 MAX_STEPS = 50
 MAX_BYTES = 512 * 2**20
 SLOW_SNAPSHOT_SECONDS = 1.0
+# the setting a session of binary blocks carries (see _snapshot)
+BINARY_SETTING = 'pse_binary_dump'
 
 # commands which change the session (camera-only commands are left out)
 UNDOABLE = '''
     fix_structure minimize prepare_structure cluster_rmsd compare_structures
     compare_sequences binding_pocket build_antibody find_cdrs predict_paratope
     aggregation cluster_irmsd renumber_residues set_chain_id set_segment_id
-    swap_chains merge_chains combine_chains lighting occlusion
+    swap_chains merge_chains combine_chains label_residues lighting
+    occlusion
     alter alter_state align alphatoall angle attach bg_color bond cartoon
     cealign clean color copy create deprotect delete deselect dihedral
     disable distance dss enable extract fab fetch fit fix_chemistry flag
@@ -60,7 +63,7 @@ UI_SETTINGS = {
     'defer_updates', 'suspend_updates', 'suspend_undo', 'text',
     'internal_gui', 'internal_gui_width', 'internal_feedback',
     'internal_prompt', 'session_file', 'mouse_selection_mode', 'seq_view',
-    'movie_panel',
+    'movie_panel', BINARY_SETTING,
 }
 
 
@@ -116,7 +119,10 @@ class UndoStack:
 
     def _snapshot(self):
         t0 = time.time()
-        session = self.cmd.get_session()
+        # atoms and coordinates as PyMOL's binary blocks rather than a
+        # Python list per atom: several times faster to make, to pickle
+        # and to restore, which counts with hundreds of structures loaded
+        session = self.cmd.get_session(binary=1)
         blob = zlib.compress(pickle.dumps(session, pickle.HIGHEST_PROTOCOL), 1)
         seconds = time.time() - t0
         if seconds > SLOW_SNAPSHOT_SECONDS and not self._warned_slow:
@@ -128,10 +134,13 @@ class UndoStack:
     def _restore(self, blob):
         _self = self.cmd
         view = list(_self.get_view())
+        binary = _self.get_setting_int(BINARY_SETTING)
         session = pickle.loads(zlib.decompress(blob))
         self._restoring = True
         try:
             _self.set_session(session)
+            # (a binary snapshot says so in its settings: see _snapshot)
+            _self.set(BINARY_SETTING, binary, quiet=1)
             # keep the camera, but restore the origin of rotation (session
             # views have a 4x4 rotation matrix, the origin is at 19:22)
             view[12:15] = session['view'][19:22]

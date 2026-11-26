@@ -45,6 +45,10 @@ COLORS = {
     'prediction_glycan': '#35a98a',
     'prediction_disulfide': '#d6b23a',
     'prediction_sequon': '#4a90d9',
+    # proximity profile (Interface Analysis, Epitope): far to close
+    'proximity_0': '#5436a6', 'proximity_1': '#8a2da5',
+    'proximity_2': '#cc4778', 'proximity_3': '#f89540',
+    'proximity_4': '#f0f921',
     # Antibody Builder schematic: parts not given yet, outlines
     'antibody_part': '#a3a3a3',
     'antibody_edge': '#1c2630',

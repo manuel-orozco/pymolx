@@ -977,9 +977,9 @@ def setup(window, prefs=None):
     QtCore.QTimer.singleShot(0, viewer.load_prefs)
 
     toggles = []
-    content_panel = getattr(window, 'content_panel', None)
-    if content_panel is not None:
-        button = content_panel.toggles.seq_button
+    toolbar = getattr(window, 'toolbar', None)
+    if toolbar is not None:
+        button = toolbar.seq_button
         button.clicked.connect(viewer.set_shown)
         toggles.append(button)
     menu = getattr(window, 'menudict', {}).get('Display')

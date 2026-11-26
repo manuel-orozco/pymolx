@@ -4,12 +4,18 @@ Main window toolbar (parity item L-03), replacing the upstream grid of
 rest follows the Incentive PyMOL 3 main window:
 
     [Select] [+/-] [R Residues v] | [Undo] [Redo] |
-        [Zoom All] [Zoom Sel] | [Presets v]
+        [Zoom All] [Zoom Sel] | [Presets v] [Labels] | [Plugins v] |
+        [Mouse mode v] | [Wizard v] | [Sequence] [Timeline] [Output]
         ... Builder... Scenes [Draw/Ray v] [...]
 
 Every button of the left half is an icon (or the selection level's
 letter) over its name in small capitals, drawn by CaptionButton, so each
 one fills the bar's height.
+
+The last five of them (parity item L-14) were Incentive PyMOL's strip
+under the content panel: the mouse mode with its menu, the Wizard menu,
+and the switches for the sequence viewer, the movie timeline and the
+command output.
 
 The view actions without a button of their own (Orient, Center, Reset
 View, Rock) are in the "..." menu. What that menu contains isn't visible
@@ -22,12 +28,14 @@ from pymol.Qt.utils import WidgetMenu
 from pymol import menu as pymol_menu
 
 from .. import picking, undo
-from . import menus, theme
+from . import menus, plugin_menu, theme
+from .mouse_modes import MouseModeMenu, mode_names
 
 Qt = QtCore.Qt
 
 ICON = 20       # px: icon buttons (undo, zoom, ...), as tall as the
                 # letter of the drawn buttons next to them
+QWIDGETSIZE_MAX = (1 << 24) - 1
 
 # what a click in the viewer picks ("mouse_selection_mode"), with the
 # short letter Maestro's selector shows for each
@@ -60,6 +68,9 @@ class CaptionButton(QtWidgets.QToolButton):
         self.letter = ''
         self.caption = ''
         self.glyph = None       # QIcon, drawn in place of the letter
+        # other captions it may get: it is wide enough for any of them,
+        # so the buttons after it stay where they are
+        self.reserve = ()
         self.setPopupMode(
             QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
         self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Fixed,
@@ -101,9 +112,10 @@ class CaptionButton(QtWidgets.QToolButton):
         caption = QtGui.QFontMetrics(caption_font)
         top = self.GLYPH if self.glyph is not None else \
             letter.horizontalAdvance(self.letter or 'CA')
+        captions = [self.caption or 'MOLECULES']
+        captions += [text.upper() for text in self.reserve]
         width = max(top + 22,
-                    caption.horizontalAdvance(self.caption or 'MOLECULES')
-                    + 10)
+                    max(map(caption.horizontalAdvance, captions)) + 10)
         height = self._top_height() + caption.height() + 8
         return QtCore.QSize(width, height)
 
@@ -127,9 +139,12 @@ class CaptionButton(QtWidgets.QToolButton):
                               inner.width(), captions.height())
         on = self.isEnabled()
         if self.glyph is not None:
+            # a switch that is on shows its "<name>-on.svg", if any
             self.glyph.paint(painter, top, Qt.AlignmentFlag.AlignCenter,
                              QtGui.QIcon.Mode.Normal if on else
-                             QtGui.QIcon.Mode.Disabled)
+                             QtGui.QIcon.Mode.Disabled,
+                             QtGui.QIcon.State.On if self.isChecked() else
+                             QtGui.QIcon.State.Off)
         else:
             painter.setFont(letter_font)
             painter.setPen(QtGui.QColor(theme.COLORS[
@@ -180,6 +195,11 @@ class Toolbar(QtWidgets.QToolBar):
         self._add_zoom()
         self.addSeparator()
         self._add_presets()
+        self._add_labels()
+        self.addSeparator()
+        self._add_plugins()
+        self.addSeparator()
+        self._add_toggles()
 
         spacer = QtWidgets.QWidget(self)
         spacer.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding,
@@ -396,6 +416,108 @@ class Toolbar(QtWidgets.QToolBar):
             menu=self._dynamic_menu(
                 lambda: pymol_menu.presets(self.cmd, 'all')))
         return btn
+
+    def _add_labels(self):
+        '''
+        The Labels tool: a window to label residues from
+        (label_dialog)
+        '''
+        self.labels_button = btn = self.caption_button(
+            'labels_button', 'labels', 'Labels',
+            'Label residues: one- or three-letter name and number, on '
+            'the atom and at the size you choose', self.open_labels)
+        return btn
+
+    def open_labels(self):
+        from . import label_dialog
+        return label_dialog.show(self.window, _self=self.cmd)
+
+    def _add_plugins(self):
+        '''
+        The plugins of the Plugin menu in one list, grouped by what
+        they are for (plugin_menu.GROUPS), under a wrench
+        '''
+        self.plugins_button = btn = self.caption_button(
+            'plugins_button', 'wrench', 'Plugins', 'Open a plugin',
+            menu=plugin_menu.create(self.window, self))
+        return btn
+
+    def _add_toggles(self):
+        '''
+        The mouse mode, the wizards and the switches for the sequence
+        viewer, the movie timeline and the command output
+        '''
+        cmd = self.cmd
+        window = self.window
+
+        # the mode's name is the caption, as the selection level's is
+        self.mouse_button = btn = self.caption_button(
+            'mouse_button', 'mouse', 'Mouse',
+            'Mouse mode: what the buttons and the wheel do in the viewer',
+            menu=MouseModeMenu(cmd, self))
+        btn.reserve = tuple(mode_names().values())
+        self._on_setting('button_mode_name', self._update_mouse_mode)
+        self.addSeparator()
+
+        self.wizard_button = self.caption_button(
+            'wizard_button', 'wand', 'Wizard', 'Wizards',
+            menu=getattr(window, 'menudict', {}).get('Wizard'))
+        self.addSeparator()
+
+        # pymolx.gui.sequence_viewer connects it
+        self.seq_button = self.caption_button(
+            'seq_button', 'sequence', 'Sequence',
+            'Show or hide the sequence viewer', checkable=True)
+
+        self.timeline_button = btn = self.caption_button(
+            'timeline_button', 'timeline', 'Timeline',
+            'Show or hide the movie timeline', checkable=True)
+        btn.clicked.connect(lambda checked: cmd.set(
+            'movie_panel', int(checked), log=1, quiet=0))
+
+        def update(value, btn=btn):
+            btn.blockSignals(True)
+            btn.setChecked(bool(value))
+            btn.blockSignals(False)
+
+        self._on_setting('movie_panel', update)
+
+        # content_panel.setup says whether the output starts shown
+        self.command_button = btn = self.caption_button(
+            'command_button', 'terminal', 'Output',
+            'Show or hide the command output', checkable=True)
+        btn.toggled.connect(self.toggle_output)
+
+    def _update_mouse_mode(self, name):
+        self.mouse_button.set_glyph(self.mouse_button.glyph,
+                                    name or 'Mouse')
+
+    def set_output_shown(self, visible):
+        '''
+        Show or hide the output pane and set its button to match.
+        '''
+        btn = self.command_button
+        btn.blockSignals(True)
+        btn.setChecked(bool(visible))
+        btn.blockSignals(False)
+        self.toggle_output(bool(visible))
+
+    def toggle_output(self, visible):
+        '''
+        Show or hide the output pane; the command line stays.
+        '''
+        window = self.window
+        window.browser.setVisible(visible)
+        dock = window.ext_window
+        frame = dock.widget()
+        frame.layout().activate()
+        if visible:
+            dock.setMaximumHeight(QWIDGETSIZE_MAX)
+            window.resizeDocks([dock], [frame.sizeHint().height()],
+                               Qt.Orientation.Vertical)
+        else:
+            # just the command line, no empty space above it
+            dock.setMaximumHeight(frame.minimumSizeHint().height())
 
     def _add_undo_redo(self):
         '''

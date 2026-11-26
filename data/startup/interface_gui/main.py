@@ -1,7 +1,8 @@
 '''
 Interface Analysis dialog: PISA-like interface list, residues and bonds,
 and the epitope: the residues of chosen target chains buried by the other
-chains (and the partners' residues burying them).
+chains (and the partners' residues burying them), with a profile of how
+close each residue of a target chain comes to the other chains.
 '''
 
 import csv
@@ -10,6 +11,9 @@ from pymol import cmd
 from pymol.Qt import QtCore, QtGui, QtWidgets
 
 from pymolx import interfaces
+from pymolx.gui import theme
+
+from . import chart
 
 Qt = QtCore.Qt
 
@@ -86,10 +90,17 @@ class InterfaceDialog(QtWidgets.QDialog):
         super().__init__(parent)
         self.cmd = _self
         self.interfaces = []
+        self.atoms = None    # interfaces.ChainAtoms of the analyzed object
+        self.proximity = {}  # {target chain: residues}, see the chart
         self.analyzed_object = ''
         self.setObjectName('interface_dialog')
         self.setWindowTitle('Interface Analysis (PISA-like)')
-        self.resize(820, 640)
+        self.resize(860, 900)
+        screen = QtWidgets.QApplication.primaryScreen()
+        if screen is not None:  # the profile made the dialog taller
+            available = screen.availableGeometry()
+            self.resize(min(860, available.width() - 40),
+                        min(900, available.height() - 60))
 
         layout = QtWidgets.QVBoxLayout(self)
 
@@ -115,7 +126,7 @@ class InterfaceDialog(QtWidgets.QDialog):
         self.interface_table = _table(INTERFACE_COLUMNS, self)
         self.interface_table.itemSelectionChanged.connect(
             self.interface_selected)
-        layout.addWidget(self.interface_table, 2)
+        layout.addWidget(self.interface_table, 1)
 
         self.tabs = QtWidgets.QTabWidget(self)
         self.residue_table = _table(RESIDUE_COLUMNS, self)
@@ -182,16 +193,69 @@ class InterfaceDialog(QtWidgets.QDialog):
         top.addWidget(self.name_style)
         layout.addLayout(top)
 
+        head = QtWidgets.QHBoxLayout()
+        head.addWidget(QtWidgets.QLabel('Proximity profile of chain', tab))
+        self.profile_chain = QtWidgets.QComboBox(tab)
+        self.profile_chain.setObjectName('profile_chain')
+        self.profile_chain.setToolTip('The target chain shown in the graph')
+        self.profile_chain.currentIndexChanged.connect(self.show_profile)
+        head.addWidget(self.profile_chain)
+        head.addWidget(QtWidgets.QLabel('Line at', tab))
+        self.contact_distance = QtWidgets.QDoubleSpinBox(tab)
+        self.contact_distance.setRange(2.0, 20.0)
+        self.contact_distance.setDecimals(1)
+        self.contact_distance.setSingleStep(0.5)
+        self.contact_distance.setSuffix(' Å')
+        self.contact_distance.setValue(interfaces.CONTACT_DISTANCE)
+        self.contact_distance.setToolTip(
+            'The dashed line: residues rising above it have an atom '
+            'closer than this to the other chains')
+        self.contact_distance.valueChanged.connect(self.show_profile)
+        head.addWidget(self.contact_distance)
+        head.addStretch(1)
+        self.color_profile_button = QtWidgets.QPushButton(
+            'Color in Viewer', tab)
+        self.color_profile_button.setToolTip(
+            'Color the target chain(s) in the viewer as in the graph: '
+            'yellow where they come close to the other chains, purple far '
+            'from them (Edit > Undo brings the colors back)')
+        self.color_profile_button.clicked.connect(self.color_profile)
+        head.addWidget(self.color_profile_button)
+        self.copy_profile_button = QtWidgets.QPushButton('Copy Data', tab)
+        self.copy_profile_button.setToolTip(
+            'The distance and score of every residue of the target '
+            'chain(s), as a table to paste into a spreadsheet')
+        self.copy_profile_button.clicked.connect(self.copy_profile)
+        head.addWidget(self.copy_profile_button)
+        self.save_profile_button = QtWidgets.QPushButton('Save Image...', tab)
+        self.save_profile_button.clicked.connect(self.save_profile)
+        head.addWidget(self.save_profile_button)
+        layout.addLayout(head)
+        self.chart = chart.ProximityChart(tab)
+        self.chart.residue_clicked.connect(self.zoom_profile_residue)
+        layout.addWidget(self.chart, 1)
+        self.chart_scroll = chart.ChartScroll(self.chart, tab)
+        layout.addWidget(self.chart_scroll)
+        self.profile_note = QtWidgets.QLabel(tab)
+        self.profile_note.setObjectName('interface_note')
+        layout.addWidget(self.profile_note)
+
+        lists = QtWidgets.QHBoxLayout()
+        column = QtWidgets.QVBoxLayout()
         self.epitope_label = QtWidgets.QLabel(
             'Epitope (target residues buried by the other chains)', tab)
-        layout.addWidget(self.epitope_label)
+        column.addWidget(self.epitope_label)
         self.epitope_text, row = self._residue_box(tab)
-        layout.addLayout(row, 1)
+        column.addLayout(row, 1)
+        lists.addLayout(column, 1)
+        column = QtWidgets.QVBoxLayout()
         self.paratope_label = QtWidgets.QLabel(
             'Partner residues (paratope)', tab)
-        layout.addWidget(self.paratope_label)
+        column.addWidget(self.paratope_label)
         self.paratope_text, row = self._residue_box(tab)
-        layout.addLayout(row, 1)
+        column.addLayout(row, 1)
+        lists.addLayout(column, 1)
+        layout.addLayout(lists)
 
         bottom = QtWidgets.QHBoxLayout()
         self.epitope_summary = QtWidgets.QLabel(tab)
@@ -206,6 +270,7 @@ class InterfaceDialog(QtWidgets.QDialog):
         layout.addLayout(bottom)
         self.epitope = {}
         self.paratope = {}
+        self.show_profile()
         return tab
 
     def _residue_box(self, parent):
@@ -213,6 +278,9 @@ class InterfaceDialog(QtWidgets.QDialog):
         text = QtWidgets.QPlainTextEdit(parent)
         text.setReadOnly(True)
         text.setObjectName('epitope_text')
+        # a few lines: the height the dialog has to spare is the graph's
+        text.setMinimumHeight(48)
+        text.setMaximumHeight(88)
         row.addWidget(text, 1)
         copy = QtWidgets.QPushButton('Copy', parent)
         copy.clicked.connect(lambda: QtWidgets.QApplication.clipboard()
@@ -241,6 +309,7 @@ class InterfaceDialog(QtWidgets.QDialog):
 
     def update_epitope(self, *_):
         targets = self.targets()
+        self.update_profile()
         if not targets:
             self.epitope, self.paratope = {}, {}
             self.epitope_text.setPlainText('')
@@ -267,6 +336,93 @@ class InterfaceDialog(QtWidgets.QDialog):
             if count else 'No residues of %s buried by the other chains' %
             '+'.join(targets))
         self.select_epitope_button.setEnabled(bool(count))
+
+    # proximity profile
+
+    def update_profile(self):
+        '''
+        The profiles of the chosen target chains, and their chain list
+        '''
+        targets = self.targets()
+        self.proximity = interfaces.proximity(self.atoms, targets) \
+            if self.atoms is not None and targets else {}
+        current = self.profile_chain.currentText()
+        self.profile_chain.blockSignals(True)
+        self.profile_chain.clear()
+        self.profile_chain.addItems(list(self.proximity))
+        if current in self.proximity:
+            self.profile_chain.setCurrentText(current)
+        self.profile_chain.blockSignals(False)
+        self.show_profile()
+
+    def show_profile(self, *_):
+        chain = self.profile_chain.currentText()
+        rows = self.proximity.get(chain, [])
+        cutoff = self.contact_distance.value()
+        self.chart.set_cutoff(cutoff)
+        for button in (self.color_profile_button, self.copy_profile_button,
+                       self.save_profile_button):
+            button.setEnabled(bool(rows))
+        if not rows:
+            self.chart.set_profile([])
+            self.chart.set_message(
+                'Analyze an object to see its profile' if self.atoms is None
+                else 'Choose the target chain(s)' if not self.targets()
+                else 'No other chains to measure to')
+            self.profile_note.setText('')
+            return
+        targets = self.targets()
+        partners = '+'.join(c for c in self.atoms.chains()
+                            if c not in targets)
+        self.chart.set_profile(
+            rows, chain, 'Proximity of %s chain %s to chain%s %s: 1 / '
+            'distance (Å) between their closest atoms, by residue' % (
+                self.analyzed_object, chain, 's' if '+' in partners else '',
+                partners))
+        self.profile_note.setText(
+            '%d of %d residues within %.1f Å (above the dashed line). '
+            'Hover for values, click a bar to zoom in on its residue.' % (
+                self.chart.within_cutoff(), len(rows), cutoff))
+
+    def zoom_profile_residue(self, chain, resi):
+        self.cmd.zoom('%%%s and chain "%s" and resi %s' % (
+            self.analyzed_object, chain, interfaces._resi(resi)), 6,
+            animate=1)
+
+    def color_profile(self):
+        '''
+        The target chains in the viewer in the graph's colors
+        '''
+        chains = list(self.proximity)
+        try:
+            count = interfaces.color_proximity(
+                self.analyzed_object, self.proximity,
+                [theme.COLORS[name] for name in chart.RAMP], _self=self.cmd)
+        except Exception as e:
+            self.status.setText('Could not color %s (analyze it again?): '
+                                '%s' % (self.analyzed_object, e))
+            return
+        self.status.setText(
+            'Colored %d residues of chain%s %s by their proximity to the '
+            'other chains' % (count, 's' if len(chains) > 1 else '',
+                              '+'.join(chains)))
+
+    def copy_profile(self):
+        QtWidgets.QApplication.clipboard().setText(
+            interfaces.format_proximity(self.proximity))
+        self.status.setText('Copied the proximity of %d residues' % sum(
+            len(rows) for rows in self.proximity.values()))
+
+    def save_profile(self):
+        filename, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, 'Save proximity profile', 'proximity_%s_%s.png' % (
+                self.analyzed_object, self.profile_chain.currentText()),
+            'PNG (*.png)')
+        if filename:
+            if not self.chart.image().save(filename):
+                self.status.setText('Could not write %s' % filename)
+                return
+            self.status.setText('Saved %s' % filename)
 
     def select_epitope(self):
         obj = self.analyzed_object
@@ -308,6 +464,8 @@ class InterfaceDialog(QtWidgets.QDialog):
         QtWidgets.QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             self.interfaces = interfaces.analyze(
+                obj, self.state.value(), _self=self.cmd)
+            self.atoms = interfaces.residue_atoms(
                 obj, self.state.value(), _self=self.cmd)
         finally:
             QtWidgets.QApplication.restoreOverrideCursor()

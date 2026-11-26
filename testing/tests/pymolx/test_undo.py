@@ -157,3 +157,40 @@ def test_clear_history():
     cmd.undo()
     undo.stack.clear_history()
     assert not undo.stack.can_undo() and not undo.stack.can_redo()
+
+
+def test_snapshots_are_binary_and_leave_the_setting():
+    import pickle
+    import zlib
+    import numpy as np
+    from pymol import setting
+    cmd.fab('ACDEFGHIK', 'pep')
+    cmd.alter('pep and resi 3', 'custom = "TAG"')
+    assert cmd.get_setting_int('pse_binary_dump') == 0
+    cmd.undo_enable()
+    try:
+        xyz = cmd.get_coords('pep')
+        cmd.color('red', 'pep and resi 2')
+        assert cmd.get_setting_int('pse_binary_dump') == 0
+        blob = undo.stack.undo_stack[-1]
+        session = pickle.loads(zlib.decompress(blob))
+        # (atoms as blocks of bytes, not a list per atom: the session
+        # says so itself)
+        index = setting.index_dict['pse_binary_dump']
+        assert [s[2] for s in session['settings'] if s[0] == index] == [1]
+        cmd.translate([5, 0, 0], 'pep', camera=0)
+        cmd.delete('pep')
+        for _ in range(3):
+            cmd.undo()
+        # everything back, and the user's own sessions stay as they were
+        assert cmd.get_setting_int('pse_binary_dump') == 0
+        assert np.allclose(cmd.get_coords('pep'), xyz)
+        assert cmd.count_atoms('pep and custom TAG') == \
+            cmd.count_atoms('pep and resi 3')
+        assert cmd.count_atoms('color red') == 0
+        cmd.redo()
+        assert cmd.count_atoms('color red') == \
+            cmd.count_atoms('pep and resi 2')
+        assert cmd.get_setting_int('pse_binary_dump') == 0
+    finally:
+        cmd.undo_disable()

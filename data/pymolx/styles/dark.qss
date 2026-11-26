@@ -256,6 +256,17 @@ QToolBar#pymolx_toolbar QToolButton::menu-arrow
     height:         10px;
 }
 
+/* the arrow Qt adds at the right end when the window is too narrow
+   for all the buttons: it opens the ones that did not fit */
+
+QToolBar#pymolx_toolbar QToolButton#qt_toolbar_ext_button
+{
+    padding:        0px;
+    min-width:      12px;       /* the room Qt leaves for it */
+    max-width:      12px;
+    qproperty-icon: url($icons/chevron-down.svg);
+}
+
 QToolBar#pymolx_toolbar QToolButton#more_button
 {
     font-size:      15px;
@@ -357,7 +368,7 @@ QFrame#panel_row QToolButton#group_arrow
     padding:        0px;
 }
 
-/* wizard panel and state bar (content panel, above the toggles) */
+/* wizard panel and state bar (content panel, under the rows) */
 
 QFrame#wizard_panel
 {
@@ -433,73 +444,6 @@ QLabel#state_label
     color:          $text_dim;
     padding-left:   6px;
     font-size:      $font_size;
-}
-
-/* toggle toolbar (bottom of the content panel), same look as the toolbar */
-
-QToolBar#pymolx_toggles
-{
-    background:     $window;
-    border:         none;
-    border-top:     1px solid $border;
-    padding:        0px;
-    spacing:        0px;
-}
-
-QToolBar#pymolx_toggles::separator
-{
-    background:     $border;
-    width:          1px;
-    margin:         0px;
-}
-
-QToolBar#pymolx_toggles QToolButton
-{
-    color:          $text;
-    background:     transparent;
-    border:         none;
-    border-radius:  0px;
-    padding:        0px 5px;
-    min-height:     30px;
-    font-size:      $font_size;
-}
-
-QToolBar#pymolx_toggles QToolButton:hover
-{
-    background:     $hover;
-}
-
-QToolBar#pymolx_toggles QToolButton:checked
-{
-    background:     $base;
-    color:          $accent_text;
-}
-
-QToolBar#pymolx_toggles QToolButton::menu-button
-{
-    border:         none;
-    border-left:    1px solid $border;
-    background:     transparent;
-    width:          16px;
-}
-
-QToolBar#pymolx_toggles QToolButton::menu-arrow
-{
-    image:          url($icons/chevron-up.svg);
-    width:          10px;
-    height:         10px;
-}
-
-QToolBar#pymolx_toggles QToolButton[split=true]
-{
-    padding-right:  21px;
-}
-
-/* no arrow on the Wizard button, like Incentive PyMOL */
-QToolBar#pymolx_toggles QToolButton::menu-indicator
-{
-    image:          none;
-    width:          0px;
 }
 
 /* output and command line */
@@ -602,6 +546,27 @@ QScrollBar::add-line, QScrollBar::sub-line
 {
     width:          0px;
     height:         0px;
+}
+
+/* the slider under the proximity profile (Interface Analysis, Epitope):
+   a control of its own, so its handle is lighter than a scroll bar's */
+QScrollBar#proximity_slider:horizontal,
+QScrollBar#alignment_slider:horizontal
+{
+    height:         12px;
+}
+
+QScrollBar#proximity_slider::handle:horizontal,
+QScrollBar#alignment_slider::handle:horizontal
+{
+    background:     $text_dim;
+    border-radius:  5px;
+}
+
+QScrollBar#proximity_slider::handle:horizontal:hover,
+QScrollBar#alignment_slider::handle:horizontal:hover
+{
+    background:     $text;
 }
 
 /* Structure Preparation workflow steps (titles bold, like other titles) */

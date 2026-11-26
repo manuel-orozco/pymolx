@@ -27,6 +27,10 @@ IDENTICAL, SIMILAR, NEUTRAL, DIFFERENT = 100.0, 200.0 / 3, 100.0 / 3, 0.0
 CATEGORIES = [(IDENTICAL, 'identical'), (SIMILAR, 'similar (BLOSUM62 > 0)'),
               (NEUTRAL, 'neutral (BLOSUM62 0)'),
               (DIFFERENT, 'different (BLOSUM62 < 0)')]
+# kinds of residues, by the least similar of a residue's pairs (what
+# the alignment can be filtered by): the names of CATEGORIES, and "none"
+# for a residue without a partner
+KINDS = ('identical', 'similar', 'neutral', 'different', 'none')
 # modified amino acids as their parents (phosphorylated, methylated,
 # oxidized, ...)
 MODIFIED = {'SEP': 'S', 'TPO': 'T', 'PTR': 'Y', 'HYP': 'P', 'MLY': 'K',
@@ -62,6 +66,19 @@ def pair_score(a, b):
         return IDENTICAL
     value = blosum62()[_scorable(a)][_scorable(b)]
     return SIMILAR if value > 0 else NEUTRAL if value == 0 else DIFFERENT
+
+
+def kind(score):
+    '''
+    "identical", "similar", "neutral" or "different" for a score (the one
+    of CATEGORIES it reaches), "none" for no score
+    '''
+    if score is None:
+        return 'none'
+    for value, name in zip((IDENTICAL, SIMILAR, NEUTRAL), KINDS):
+        if score >= value - 1e-9:
+            return name
+    return 'different'
 
 
 class Entry:
@@ -192,6 +209,12 @@ class Result:
     '''
     groups, scores {entry name: {position: score}}, stats per entry,
     identity matrix
+
+    lowest: like scores, the least similar of a residue's pairs. The
+    same as its score for a chain compared to the reference; for the
+    reference (and for every chain, all against all) the score is a mean
+    over several pairs, and this tells "identical in all of them" from
+    "different in one".
     '''
 
     def __init__(self):
@@ -199,12 +222,23 @@ class Result:
         self.reference = ''
         self.mode = 'reference'
         self.scores = {}
+        self.lowest = {}
         self.stats = {}
         self.alignment = ''
 
     @property
     def entries(self):
         return [e for g in self.groups for e in g.entries]
+
+    def kind(self, name, position):
+        '''
+        The kind of a residue (KINDS): how its least similar pair
+        compares, "none" without a partner
+
+        :param name: entry name
+        :param position: index in the entry's residues
+        '''
+        return kind(self.lowest.get(name, {}).get(position))
 
     def identity_matrix(self):
         '''
@@ -326,6 +360,7 @@ def compute(objects='', reference='', selection='polymer.protein',
         ref = group.reference
         for e in group.entries:
             result.scores[e.name] = {}
+            result.lowest[e.name] = {}
         for k, column in enumerate(group.columns):
             if mode == 'reference':
                 a = group.letter(ref, k)
@@ -335,12 +370,14 @@ def compute(objects='', reference='', selection='polymer.protein',
                     if a is not None and b is not None:
                         score = pair_score(a, b)
                         result.scores[e.name][column[e.name]] = score
+                        result.lowest[e.name][column[e.name]] = score
                         values.append(score)
                     elif a is not None and group.internal_gap(e, k):
                         values.append(DIFFERENT)
                 if a is not None and values:
                     result.scores[ref.name][column[ref.name]] = \
                         sum(values) / len(values)
+                    result.lowest[ref.name][column[ref.name]] = min(values)
             else:
                 values = []
                 entries = group.entries
@@ -356,6 +393,7 @@ def compute(objects='', reference='', selection='polymer.protein',
                     mean = sum(values) / len(values)
                     for name, pos in column.items():
                         result.scores[name][pos] = mean
+                        result.lowest[name][pos] = min(values)
 
         for e in group.entries:
             stats = {'reference': e is ref, 'length': len(e.residues),

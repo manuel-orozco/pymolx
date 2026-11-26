@@ -1,16 +1,16 @@
 '''
 Sequence Comparison dialog: choose the structures, the reference and what
-to compare; results as the colored alignment, a percent identity matrix
-and a summary per chain.
+to compare; results as the colored alignment (wrapped or extended, see
+alignment.py), a percent identity matrix and a summary per chain.
 '''
 
-import html
-
 from pymol import cmd
-from pymol.Qt import QtCore, QtGui, QtWidgets
+from pymol.Qt import QtCore, QtWidgets
 
-from pymolx import compare, seqcompare
-from pymolx.gui import theme
+from pymolx import seqcompare
+from pymolx.gui.sequence_viewer import MemoryPrefs, PluginPrefs
+
+from . import alignment
 
 Qt = QtCore.Qt
 
@@ -18,90 +18,86 @@ _dialog = None
 
 MODES = [('Each to the reference', 'reference'),
          ('All against all (per position)', 'all')]
-BLOCK = 60          # alignment columns per line
-LIGHTEN = 0.45      # residue backgrounds: score colors toward white
+PREF_LAYOUT = 'pymolx_seqcompare_layout'  # wrapped or extended
 
 
-def _background(score):
-    '''
-    "#rrggbb" for a residue's score (None: no partner)
-    '''
-    if score is None:
-        return theme.COLORS['border']
-    r, g, b = compare.ramp_color(score / 100.0)
-    return '#%02x%02x%02x' % tuple(
-        round(255 * (c + (1 - c) * LIGHTEN)) for c in (r, g, b))
-
-
-def alignment_html(result):
-    '''
-    The alignment, colored, in blocks of BLOCK columns with the
-    reference's residue numbers above
-    '''
-    width = max(len(e.name) + len(' (ref)') for e in result.entries)
-    dark = theme.COLORS['base']
-    out = []
-    for group in result.groups:
-        ref = group.reference
-        n = len(group.columns)
-        for start in range(0, n, BLOCK):
-            stop = min(n, start + BLOCK)
-            # ruler: the reference's residue number every 10 columns
-            ruler = [' '] * (stop - start)
-            for k in range(start, stop):
-                pos = group.columns[k].get(ref.name)
-                if pos is not None and (k - start) % 10 == 0:
-                    label = ref.residues[pos][0]
-                    for j, ch in enumerate(label):
-                        if k - start + j < len(ruler):
-                            ruler[k - start + j] = ch
-            out.append('<span style="color:%s">%s%s</span>' % (
-                theme.COLORS['text_dim'], ' ' * (width + 1),
-                html.escape(''.join(ruler))))
-            for e in group.entries:
-                label = e.name + (' (ref)' if e is ref else '')
-                cells = []
-                for k in range(start, stop):
-                    pos = group.columns[k].get(e.name)
-                    if pos is None:
-                        cells.append('-')
-                        continue
-                    resi, resn, letter, index = e.residues[pos]
-                    letter = letter if index is not None else letter.lower()
-                    score = result.scores[e.name].get(pos)
-                    cells.append(
-                        '<span style="background-color:%s;color:%s" '
-                        'title="%s %s %s">%s</span>' % (
-                            _background(score), dark, e.name, resn, resi,
-                            letter))
-                out.append('%s %s' % (html.escape(label.ljust(width)),
-                                      ''.join(cells)))
-            out.append('')
-    return '<pre style="font-family:%s">%s</pre>' % (
-        html.escape(theme.console_font().family()), '\n'.join(out))
+# what each kind of residue means (the check boxes' tooltips)
+KIND_TIPS = {
+    'identical': 'The same residue in every sequence it is compared with',
+    'similar': 'A similar residue (BLOSUM62 above 0) in the least alike '
+               'of the sequences it is compared with',
+    'neutral': 'A neutral one (BLOSUM62 of 0) in the least alike of them',
+    'different': 'A different residue (BLOSUM62 below 0), or none where '
+                 'the others have one, in at least one of them',
+    'none': 'Nothing to compare it with: no other sequence has a residue '
+            'there',
+}
 
 
 class Legend(QtWidgets.QWidget):
+    '''
+    The colors' meaning, and the filter: a check box per kind of residue
+    (seqcompare.KINDS). Unticked kinds are greyed out in the alignment.
+    '''
+
+    changed = QtCore.Signal(object)     # the set of kinds shown
 
     def __init__(self, parent=None):
         super().__init__(parent)
         row = QtWidgets.QHBoxLayout(self)
         row.setContentsMargins(0, 0, 0, 0)
-        for score, label in seqcompare.CATEGORIES + [(None, 'no partner')]:
+        self.boxes = {}
+        labels = [label.split(' (')[0]
+                  for _, label in seqcompare.CATEGORIES] + ['no partner']
+        scores = [score for score, _ in seqcompare.CATEGORIES] + [None]
+        for kind, label, score in zip(seqcompare.KINDS, labels, scores):
             swatch = QtWidgets.QLabel(self)
             swatch.setFixedSize(14, 14)
-            swatch.setStyleSheet('background-color:%s' % _background(score))
+            swatch.setStyleSheet('background-color:%s' %
+                                 alignment.background(score))
             row.addWidget(swatch)
-            row.addWidget(QtWidgets.QLabel(label.split(' (')[0], self))
+            box = QtWidgets.QCheckBox(label, self)
+            box.setChecked(True)
+            box.setToolTip(KIND_TIPS[kind] + '.\nUntick to grey these '
+                           'residues out in the alignment.')
+            box.toggled.connect(self._toggled)
+            self.boxes[kind] = box
+            row.addWidget(box)
             row.addSpacing(8)
         row.addStretch(1)
+        for label, state in (('All', True), ('None', False)):
+            button = QtWidgets.QPushButton(label, self)
+            button.setAutoDefault(False)
+            button.setToolTip('Show %s kind of residue in color' % (
+                'every' if state else 'no'))
+            button.clicked.connect(lambda _=False, s=state: self.set_all(s))
+            row.addWidget(button)
+            setattr(self, 'all_button' if state else 'none_button', button)
+
+    def shown(self):
+        '''
+        :return: the kinds of residues ticked
+        '''
+        return {kind for kind, box in self.boxes.items() if box.isChecked()}
+
+    def set_all(self, state):
+        for box in self.boxes.values():
+            box.blockSignals(True)
+            box.setChecked(state)
+            box.blockSignals(False)
+        self._toggled()
+
+    def _toggled(self, *_):
+        self.changed.emit(self.shown())
 
 
 class SequenceDialog(QtWidgets.QDialog):
 
-    def __init__(self, parent=None, _self=cmd):
+    def __init__(self, parent=None, _self=cmd, prefs=None):
         super().__init__(parent)
         self.cmd = _self
+        # (the owner's preferences only in the real dialog: show_dialog)
+        self.prefs = prefs if prefs is not None else MemoryPrefs()
         self.result = None
         self.setObjectName('seqcompare_dialog')
         self.setWindowTitle('Sequence Comparison')
@@ -168,11 +164,17 @@ class SequenceDialog(QtWidgets.QDialog):
         left.addLayout(run)
 
         self.tabs = QtWidgets.QTabWidget(self)
-        self.view = QtWidgets.QTextBrowser(self)
-        self.view.setObjectName('seqcompare_alignment')
-        self.view.setLineWrapMode(QtWidgets.QTextEdit.LineWrapMode.NoWrap)
-        self.view.setFont(theme.console_font())
-        self.tabs.addTab(self.view, 'Alignment')
+        page = QtWidgets.QWidget(self)
+        column = QtWidgets.QVBoxLayout(page)
+        column.setContentsMargins(0, 0, 0, 0)
+        self.view = alignment.AlignmentView(
+            page, self.prefs.get(PREF_LAYOUT, alignment.WRAPPED))
+        column.addWidget(self.view, 1)
+        self.view_scroll = alignment.AlignmentScroll(self.view, page)
+        self.view_scroll.layout_chosen.connect(
+            lambda name: self.prefs.set(PREF_LAYOUT, name))
+        column.addWidget(self.view_scroll)
+        self.tabs.addTab(page, 'Alignment')
         self.matrix = QtWidgets.QTableWidget(self)
         self.matrix.setObjectName('seqcompare_identity')
         self.matrix.setEditTriggers(
@@ -188,15 +190,24 @@ class SequenceDialog(QtWidgets.QDialog):
         self.summary.horizontalHeader().setStretchLastSection(True)
         self.tabs.addTab(self.summary, 'Summary')
         right.addWidget(self.tabs, 1)
-        right.addWidget(Legend(self))
+        self.legend = Legend(self)
+        self.legend.changed.connect(self.view.set_shown)
+        right.addWidget(self.legend)
         note = QtWidgets.QLabel(
-            'Similar, neutral, different: BLOSUM62 above, at, below 0. Lower '
-            'case: residues without coordinates. Hover a residue for its '
-            'number.', self)
+            'Similar, neutral, different: BLOSUM62 above, at, below 0. '
+            'Untick a kind of residue to grey it out; a residue of the '
+            'reference counts by the least alike of the other sequences. '
+            'Lower case: residues without coordinates. Hover a residue for '
+            'its number.', self)
         note.setObjectName('prep_note')
         note.setWordWrap(True)
         right.addWidget(note)
         actions = QtWidgets.QHBoxLayout()
+        self.copy_button = QtWidgets.QPushButton('Copy Alignment', self)
+        self.copy_button.setToolTip('The alignment as text, in the lines '
+                                    'it is shown in (also Ctrl + C)')
+        self.copy_button.clicked.connect(self.copy_alignment)
+        actions.addWidget(self.copy_button)
         actions.addStretch(1)
         self.fasta_button = QtWidgets.QPushButton('Save FASTA...', self)
         self.fasta_button.clicked.connect(self.save_fasta)
@@ -288,7 +299,7 @@ class SequenceDialog(QtWidgets.QDialog):
             len(r.entries), len(r.groups), '' if len(r.groups) == 1 else 's',
             r.reference))
         print(r.table())
-        self.view.setHtml(alignment_html(r))
+        self.view.set_result(r)
         self._fill_matrix()
         self._fill_summary()
         self._enable_results(True)
@@ -327,8 +338,14 @@ class SequenceDialog(QtWidgets.QDialog):
         self.summary.resizeColumnsToContents()
 
     def _enable_results(self, enabled):
+        self.copy_button.setEnabled(enabled)
         self.fasta_button.setEnabled(enabled)
         self.csv_button.setEnabled(enabled)
+
+    def copy_alignment(self):
+        if self.result:
+            self.view.copy()
+            self.status.setText('Copied the alignment')
 
     def save_fasta(self):
         if not self.result:
@@ -355,7 +372,7 @@ def show_dialog():
     global _dialog
     if _dialog is None:
         from pymol.gui import get_qtwindow
-        _dialog = SequenceDialog(get_qtwindow())
+        _dialog = SequenceDialog(get_qtwindow(), prefs=PluginPrefs())
     _dialog.show()
     _dialog.raise_()
     _dialog.activateWindow()

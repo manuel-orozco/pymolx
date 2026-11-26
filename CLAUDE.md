@@ -125,7 +125,21 @@ used in code and commits: [INCENTIVE_PARITY.md](INCENTIVE_PARITY.md).
   `structure_prep_gui` (worker QThread pattern), `cluster_gui` (RMSD
   clustering of e.g. antibody-antigen models, `pymolx.cluster`),
   `compare_gui` (similarity coloring of close relatives, `pymolx.compare`),
-  `seqcompare_gui` (the same by sequence, `pymolx.seqcompare`),
+  `seqcompare_gui` (the same by sequence, `pymolx.seqcompare`; its
+  alignment is painted, not HTML: `alignment.AlignmentView`, a
+  QAbstractScrollArea whose names stay at the left, laid out "wrapped"
+  (as many tens of columns per line as fit) or "extended" (a chain on
+  one line), with `AlignmentScroll` below it: layout box, slider and
+  the - and + buttons for the letter size; the layout is the plugin
+  preference `pymolx_seqcompare_layout`; the residue numbers above
+  the reference come every 10 columns up to the normal letter size
+  and every 5, 2 or 1 with larger letters, `alignment.ruler_plan`,
+  which also makes them smaller than the letters so that one fits
+  above every residue; the legend's check boxes, `main.Legend`, grey
+  out kinds of residues, `AlignmentView.set_shown`: a residue's kind,
+  `Result.kind`, goes by `Result.lowest`, the least alike of its
+  pairs, not by its score, which for the reference is a mean and would
+  call "identical in two, different in one" similar),
   `pocket_gui` (residues near a ligand, `pymolx.pocket`),
   `antibody_gui` (full IgG from Fab/scFv/VHH arms, hinge, Fc and
   C-terminal fusions, `pymolx.antibody`),
@@ -157,6 +171,24 @@ used in code and commits: [INCENTIVE_PARITY.md](INCENTIVE_PARITY.md).
   chain, resi)} that `modify.apply` checks for two residues ending up
   as one and then makes in a single `alter`; the dialog runs each
   button in `undo.stack.step(True)`, so it is one undo step).
+- Graphs are painted with QPainter in the plugin (no matplotlib or
+  pyqtgraph in the GUI): `interface_gui/chart.py` (`ProximityChart`,
+  the Epitope tab's bar per residue of a target chain, score 1 /
+  distance in A to the other chains' closest atom, from
+  `interfaces.proximity`; the dialog reads the coordinates once per
+  Analyze, `interfaces.residue_atoms`, so ticking target chains needs
+  no PyMOL calls; "Color in Viewer" gives the target chains the same
+  colors in the viewer, `interfaces.color_proximity`, which takes the
+  ramp as an argument because the theme is not the core's to import,
+  and ends it at `interfaces.PROXIMITY_SCORE_TOP` as the graph does),
+  like `compare_gui`'s profile and `cluster_gui`'s
+  heatmap. A chart paints in `draw(painter)`, which `paintEvent` and
+  `image(scale)` (Save Image...) share; its color ramp is a run of
+  `COLORS` entries (`proximity_0`..`proximity_4`). A residue gets at
+  least `SLOT_WIDTH` (1 px), so a chain longer than the plot is
+  scrolled (`offset`, `zoom`, signal `view_changed`) with the row
+  below it, `chart.ChartScroll`: a QScrollBar (`#proximity_slider` in
+  the stylesheet) and the -, + and Whole Chain buttons.
 - Theme: colors only in `COLORS` (`modules/pymolx/gui/theme.py`), used as
   `$name` in `data/pymolx/styles/dark.qss` (literal `$` must be `$$`).
   Icons: `data/pymolx/icons/*.svg` (own artwork; `<name>-on.svg` = checked).
@@ -169,7 +201,7 @@ used in code and commits: [INCENTIVE_PARITY.md](INCENTIVE_PARITY.md).
 - Menus from `pymol.menu` data: `pymolx.gui.menus.PyMenu` + `fill_menu`
   (draws PyMOL color codes like `\900`).
 - Main window parts: toolbar (`gui/toolbar.py`), content panel with
-  wizard panel, state bar and toggle toolbar (`gui/content_panel.py`),
+  wizard panel and state bar (`gui/content_panel.py`),
   mouse mode menu (`gui/mouse_modes.py`), sequence viewer dock above the
   viewer (`gui/sequence_viewer.py`, data in `pymolx/sequence.py`).
   Output/command line is the bottom dock `window.ext_window`. "Scripts"
@@ -177,6 +209,34 @@ used in code and commits: [INCENTIVE_PARITY.md](INCENTIVE_PARITY.md).
   `scripts/` of the source
   checkout: `setup.py` writes its path to the installed
   `pymolx/_source.py` (`pymolx.paths`).
+- Incentive PyMOL's strip under the content panel is in the toolbar
+  instead, right of Plugins, as five more caption buttons: the mouse
+  mode (its name is the caption, as the selection level's is; the
+  button is as wide as the longest name, `CaptionButton.reserve`), the
+  Wizard menu, and the Sequence, Timeline and Output switches
+  (`toolbar.seq_button`, `timeline_button`, `command_button`; a switch
+  that is on is pressed in and shows `<name>-on.svg`). The window
+  starts at least as wide as the toolbar (`content_panel.setup`);
+  narrower, Qt moves the buttons at the right end into the arrow at
+  the bar's end (`#qt_toolbar_ext_button` in the stylesheet). A test
+  window that sets up the content panel or the sequence viewer needs
+  a toolbar first (`add_toolbar` in `test_panel.py`).
+- The toolbar's Labels button (tag, right of Presets) opens
+  `gui/label_dialog.py`, a window kept open beside the viewer (one per
+  session, `label_dialog.show`): residues (the clicked selection
+  `sele` first, once there is one, unless the user picked another
+  entry; read again when the list opens or the window is activated),
+  format, atom and font size. The work is `pymolx.labels`
+  (`label_residues`: one label per residue on the atom asked for,
+  `find` gives {(model, index): text} and one `alter` writes them;
+  `labels.clear`). The font size is the global `label_size` setting.
+  Not hooked into Show > label (the owner took that back).
+- The toolbar's Plugins button (wrench, right of Labels) lists the
+  Plugin menu's own actions under headings (`gui/plugin_menu.py`,
+  `GROUPS`), rebuilt each time it opens, so plugins installed later
+  show up too. A new plugin's menu label has to be named in `GROUPS`,
+  or it lands under "Miscellaneous" (`test_plugin_groups` checks that
+  every name there is a real label).
 
 ## Gotchas found the hard way
 
@@ -306,10 +366,37 @@ used in code and commits: [INCENTIVE_PARITY.md](INCENTIVE_PARITY.md).
   fails the same way).
 - A selection per object is a pass over every atom of the session:
   `%obj and ... within 10 of ...` costs 0.15 s with 100 predicted
-  complexes loaded (540 000 atoms), so three per model took 46 s.
-  Read all the models in one `iterate_state` and find the neighbours
-  with `scipy.spatial.cKDTree` (`irmsd.heavy_atoms`,
-  `irmsd.close_residues`: 3 s for the same answer).
+  complexes loaded (540 000 atoms), so anything done model by model
+  takes time that grows with the square of their number (RMSD
+  clustering of 100 models took 40 s, of 500 a quarter of an hour;
+  more CPUs do nothing for it). What to do instead, as `pymolx.cluster`
+  does (500 models in 7 s):
+  read all the models in one `iterate_state` (`cluster.read_sides`,
+  which relies on PyMOL going through the atoms object by object) and
+  find the neighbours with `scipy.spatial.cKDTree`
+  (`cluster.close_residues`); move an object with
+  `cmd.get_coordset(name, state)` and `cmd.load_coordset(xyz, name,
+  state)`, which take the object's name, not a selection (and leave it
+  no matrix, as `transform_object` would); color many objects with one
+  `alter ..., "color = colors.get(model, color)"` and `recolor`.
+- Maths over all pairs of models: no Python loop over the pairs. One
+  model against all later ones per numpy call (`cluster.rmsd_matrix`,
+  batched SVD in `cluster.rotations`), or all pairs from a few matrix
+  products (`irmsd.irmsd_matrix`: each pair has its own atoms, so the
+  sums over them come from the masks; pairs closer than
+  `irmsd.EXACT_BELOW` are then measured atom by atom, because a
+  difference of large sums is noise for two copies of one structure).
+  A widget must not paint a rectangle per pair either:
+  `cluster_gui`'s heatmap is a QImage made once per result.
+- Undo snapshots are `cmd.get_session(binary=1)`: atoms as PyMOL's
+  binary blocks, five times faster to take and to restore than a
+  Python list per atom (3.5 s against 17.6 s with 500 models). Such a
+  session carries `pse_binary_dump` = 1, and `set_session` would leave
+  it on for the user's own saved sessions: `undo._restore` puts the
+  setting back.
+- A script run with `pymol script.py` or `run` has the `pymol` module
+  as its globals: a variable called `session` (or `cmd`, ...) there
+  replaces PyMOL's own, and `del session` breaks `cmd.get_session`.
 - In the GUI an undo step lasts until control is back in the event
   loop: two changes made in one `QTimer.singleShot` callback of a test
   script are one step, and the second undo takes back the load. Give
@@ -319,6 +406,26 @@ used in code and commits: [INCENTIVE_PARITY.md](INCENTIVE_PARITY.md).
   selections in `get_names('all')`. A residue need not have an alpha
   carbon (1oky's last one is a lone N): count residues by their
   (segi, chain, resi), not by `name CA`.
+- `pymol.Qt` has no `QtTest`: a test clicks or hovers by sending a
+  `QtGui.QMouseEvent` with `QApplication.sendEvent`. In a script
+  started as `pymol script.py`, `__file__` points into the installed
+  `pymol` package, not at the script: write its folder out in full.
+- A `QPlainTextEdit`'s size hint (192 px high) beats the stretch
+  factors of a layout: cap its height, or a widget meant to take the
+  spare room (the Epitope tab's graph) stays at its minimum.
+- A QScrollBar with nothing to scroll (minimum = maximum) is drawn
+  empty, enabled or not: to show a handle from end to end, give it a
+  range of one pixel and a page step of the view's width
+  (`ChartScroll.follow`). A widget that is never shown gets no
+  `resizeEvent` from `resize()`: a test sends a `QResizeEvent` itself.
+- The GUI can die as it starts with a segfault inside
+  `libnvidia-glcore` (Qt flushing the window, `QRhi::endFrame`; nothing
+  of the script has run yet) while a compute job has the 5090's memory
+  nearly full: the desktop is drawn by that card. It comes and goes
+  from run to run, and a bare PySide6 window holding a QOpenGLWidget
+  does the same, so it is not pymolx. For a GUI check meanwhile, render
+  in software:
+  `__GLX_VENDOR_LIBRARY_NAME=mesa LIBGL_ALWAYS_SOFTWARE=1 ../pymolx-env/bin/pymol script.py`.
 - Kill test processes by PID, never `pkill -f` with a pattern that
   matches your own shell command.
 - Quitting the GUI by closing the window, File > Quit, the viewer
@@ -344,7 +451,7 @@ used in code and commits: [INCENTIVE_PARITY.md](INCENTIVE_PARITY.md).
   white hydrogens (`AtomInfoGetColor`, also with `auto_color` 0; "hydrogen"
   stays 0.9 grey), also the first entry of Color > by element (its
   "HNOS..." entry, `util.cnc`, removed); the output pane starts hidden
-  (`content_panel.SHOW_OUTPUT`), only the command line shows until ">_";
+  (`content_panel.SHOW_OUTPUT`), only the command line shows until the toolbar's Output button;
   Structure Preparation is a Maestro-like workflow (`pymolx.prep`,
   `pymolx.hbonds` for flips/rotatable H, `pymolx.diagnostics`);
   restraints hold input atoms only; MolProbity's Top8000 grids

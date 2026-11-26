@@ -28,6 +28,7 @@ import os
 import fnmatch
 import re
 
+import pymol
 from pymol import cmd
 
 METHODS = ('average', 'complete', 'single', 'gromos')
@@ -72,6 +73,12 @@ NAME_COLUMNS = ('model', 'name', 'object', 'file', 'filename', 'path',
 LOWER_IS_BETTER = ('rank', 'energy', 'rmsd', 'dg', 'kcal', 'clash', 'pae')
 ATOMS = {'ca': 'name CA', 'backbone': 'name N+CA+C+O',
          'heavy': 'not hydro'}
+# the same by atom name (None: all heavy atoms)
+ATOM_NAMES = {'ca': ('CA',), 'backbone': ('N', 'CA', 'C', 'O'),
+              'heavy': None}
+# numbers (coordinates) worked on at a time, when many models are
+# superimposed at once: 16 MB each
+BATCH = 2000000
 # conserved motifs of antibody variable domains (heavy, light, VHH, scFv;
 # human and mouse): the framework 1 Cys 9-16 residues before the framework
 # 2 Trp (W-V/I/Y/F-x-Q/K/R, e.g. WVRQ, WIRK, WYQQ), later the framework 4
@@ -211,13 +218,25 @@ def read_scores(path, chains=(), antibody=()):
     return scores
 
 
-def find_scores(obj, folder='', chains=(), antibody=()):
+def folder_listing(folder):
+    '''
+    :return: [(directory, {file names})] of a folder and those inside it
+    '''
+    if not folder:
+        return []
+    return [(root, set(found))
+            for root, _, found in os.walk(os.path.expanduser(folder))]
+
+
+def find_scores(obj, folder='', chains=(), antibody=(), listing=None):
     '''
     The confidence scores of a predicted model: from the JSON next to the
     file it was loaded from, or found in "folder" by the object's name
 
     :param chains, antibody: the structure's chain IDs in order and the
         antibody's, for the antibody-antigen chain pair scores
+    :param listing: folder_listing(folder), when many models are looked
+        up (default: the folder is listed here)
 
     :return: ({'iptm', 'ptm', 'ranking', 'ab_ag_iptm', ...}, path) or
         ({}, None)
@@ -229,8 +248,9 @@ def find_scores(obj, folder='', chains=(), antibody=()):
         places.append((os.path.dirname(path), _score_names(_stem(path))))
     if folder:
         names = _score_names(obj)
-        folder = os.path.expanduser(folder)
-        for root, _, found in os.walk(folder):
+        if listing is None:
+            listing = folder_listing(folder)
+        for root, found in listing:
             places.append((root, [n for n in names if n in found]))
     for directory, names in places:
         for name in names:
@@ -371,15 +391,142 @@ def _objects(objects, _self):
     return found
 
 
-def _atoms(obj, selection, state, _self):
+class Side:
     '''
-    :return: {(chain, resi, name): (x, y, z)}
+    One part of one model (e.g. its antigen), as read_sides reads it:
+
+    xyz: array (atoms, 3) of its heavy atoms
+    residue: for each of them, the index of its residue in "residues"
+    residues: [(chain, resi)]
+    keys, coords: [(chain, resi, name)] and array (n, 3) of the atoms to
+    compare (those with the wanted names; all of them without names)
     '''
-    atoms = {}
-    _self.iterate_state(state, '%%%s and (%s) and present' % (obj, selection),
-                        'atoms[(chain, resi, name)] = (x, y, z)',
-                        space={'atoms': atoms})
-    return atoms
+
+    __slots__ = ('xyz', 'residue', 'residues', 'keys', 'coords')
+
+
+def _side(chains, resis, atom_names, flat, names):
+    import numpy as np
+    n = len(chains)
+    side = Side()
+    side.xyz = np.array(flat, dtype=float).reshape(n, 3)
+    side.residues = residues = []
+    index = []
+    last = None
+    for key in zip(chains, resis):
+        if key != last:
+            residues.append(key)
+            last = key
+        index.append(len(residues) - 1)
+    side.residue = np.array(index, dtype=np.intp)
+    # (an atom given twice, as with alternate locations: the last one)
+    rows = {(chains[i], resis[i], atom_names[i]): i for i in range(n)
+            if names is None or atom_names[i] in names}
+    side.keys = list(rows)
+    side.coords = side.xyz if len(rows) == n else \
+        side.xyz[list(rows.values())]
+    return side
+
+
+def read_sides(models, selection, state=1, names=None, _self=cmd):
+    '''
+    The heavy atoms of a selection in each model, all read in one pass.
+    (Asking PyMOL model by model means a pass over every atom of the
+    session each time, and a "within" on top for the contacts: the time
+    grows with the square of the number of models, minutes for a few
+    hundred. This way it grows with their number.)
+
+    :param names: names of the atoms to compare, e.g. ("CA",) (default:
+        all heavy atoms)
+    :return: {model: Side}, for every model (empty where nothing of the
+        selection is)
+    '''
+    wanted = set(models)
+    names = None if names is None else frozenset(names)
+    sides = {}
+    chains, resis, atom_names, flat = [], [], [], []
+    current = [None, False]     # the model being read, and if it is wanted
+
+    def flush():
+        if current[1] and chains:
+            sides[current[0]] = _side(chains, resis, atom_names, flat,
+                                      names)
+        del chains[:], resis[:], atom_names[:], flat[:]
+
+    def add(model, chain, resi, name, x, y, z):
+        # (PyMOL goes through the atoms object by object)
+        if model != current[0]:
+            flush()
+            current[:] = model, model in wanted
+        if current[1]:
+            chains.append(chain)
+            resis.append(resi)
+            atom_names.append(name)
+            flat.append(x)
+            flat.append(y)
+            flat.append(z)
+
+    _self.iterate_state(state, '(%s) and not hydro and present' % selection,
+                        'add(model, chain, resi, name, x, y, z)',
+                        space={'add': add})
+    flush()
+    return {m: sides[m] if m in sides else _side([], [], [], [], names)
+            for m in models}
+
+
+def close_residues(side, other, distance=CONTACT):
+    '''
+    The residues of "side" with a heavy atom within "distance" of one of
+    "other" (two Side of one model)
+
+    :return: {(chain, resi)}
+    '''
+    import numpy as np
+    from scipy.spatial import cKDTree
+    if not len(side.xyz) or not len(other.xyz):
+        return set()
+    nearest, _ = cKDTree(other.xyz).query(side.xyz,
+                                          distance_upper_bound=distance)
+    return {side.residues[k]
+            for k in np.unique(side.residue[np.isfinite(nearest)])}
+
+
+def joined(first, second, residues=None):
+    '''
+    The atoms to compare of two Side of one model as one set, e.g. the
+    antigen's and the antibody's
+
+    :param residues: {(chain, resi)} to keep (default: all)
+    :return: (keys, array (n, 3))
+    '''
+    import numpy as np
+    rows = {}
+    xyz = np.concatenate([first.coords, second.coords])
+    for i, key in enumerate(first.keys + second.keys):
+        if residues is None or key[:2] in residues:
+            rows[key] = i
+    return list(rows), xyz[list(rows.values())]
+
+
+def matched_atoms(atoms):
+    '''
+    The atoms all models have, matched by chain, residue and name
+
+    :param atoms: [(keys, array (n, 3))] per model
+    :return: (keys, array (models, atoms, 3))
+    '''
+    import numpy as np
+    first = atoms[0][0]
+    if all(keys == first for keys, _ in atoms[1:]):
+        # (the usual case, models of one complex: nothing to look up)
+        return list(first), np.array([xyz for _, xyz in atoms], dtype=float)
+    keys = sorted(set(first).intersection(*(keys for keys, _ in atoms[1:])))
+    out = np.zeros((len(atoms), len(keys), 3))
+    for n, (model_keys, xyz) in enumerate(atoms):
+        row = {key: i for i, key in enumerate(model_keys)}
+        if keys:
+            out[n] = xyz[[row[key] for key in keys]]
+    return keys, out
 
 
 def kabsch(mobile, target):
@@ -395,21 +542,57 @@ def kabsch(mobile, target):
     return rotation, tc - rotation @ pc
 
 
+def rotations(mobile, target):
+    '''
+    kabsch for many structures at once
+
+    :param mobile: array (models, atoms, 3), each centered on its origin
+    :param target: array (atoms, 3) or (models, atoms, 3), centered too
+    :return: array (models, 3, 3), the rotations of "mobile" onto "target"
+    '''
+    import numpy as np
+    u, _, vt = np.linalg.svd(mobile.transpose(0, 2, 1) @ target)
+    v = vt.transpose(0, 2, 1).copy()
+    ut = u.transpose(0, 2, 1)
+    v[:, :, 2] *= np.sign(np.linalg.det(v @ ut))[:, None]
+    return v @ ut
+
+
+def batches(first, end, atoms):
+    '''
+    (start, stop) over first..end, so many models at a time that their
+    atoms' coordinates stay below BATCH numbers
+    '''
+    size = max(1, BATCH // max(1, 3 * atoms))
+    return [(start, min(end, start + size))
+            for start in range(first, end, size)]
+
+
 def rmsd_matrix(fit, measure):
     '''
-    :param fit: [array (n, 3)] per model, atoms to superimpose on
-    :param measure: [array (m, 3)] per model, atoms to measure
+    :param fit: array (models, n, 3), or a list of arrays (n, 3): the
+        atoms to superimpose on
+    :param measure: the same for the atoms to measure (m per model)
     :return: symmetric matrix (models x models), Angstrom
     '''
     import numpy as np
+    fit = np.asarray(fit, dtype=float)
+    measure = np.asarray(measure, dtype=float)
     n = len(fit)
     matrix = np.zeros((n, n))
-    for i in range(n):
-        for j in range(i + 1, n):
-            rotation, translation = kabsch(fit[j], fit[i])
-            moved = measure[j] @ rotation.T + translation
-            d = np.sqrt(((moved - measure[i]) ** 2).sum(axis=1).mean())
-            matrix[i, j] = matrix[j, i] = d
+    # each model with its fit atoms' centroid at the origin
+    centers = fit.mean(axis=1)[:, None, :]
+    fit = fit - centers
+    measure = measure - centers
+    for i in range(n - 1):
+        # one model against all after it, in one go
+        for start, stop in batches(i + 1, n, measure.shape[1]):
+            rotation = rotations(fit[start:stop], fit[i])
+            moved = measure[start:stop] @ rotation.transpose(0, 2, 1)
+            moved -= measure[i]
+            d = np.sqrt(np.einsum('jak,jak->j', moved, moved) /
+                        measure.shape[1])
+            matrix[i, start:stop] = matrix[start:stop, i] = d
     return matrix
 
 
@@ -446,12 +629,15 @@ def jaccard_matrix(sets):
     '''
     import numpy as np
     n = len(sets)
-    matrix = np.zeros((n, n))
-    for i in range(n):
-        for j in range(i + 1, n):
-            union = sets[i] | sets[j]
-            d = 1.0 - len(sets[i] & sets[j]) / len(union) if union else 1.0
-            matrix[i, j] = matrix[j, i] = d
+    column = {item: k for k, item in enumerate(set().union(*sets))}
+    member = np.zeros((n, len(column)))
+    for row, items in enumerate(sets):
+        member[row, [column[item] for item in items]] = 1.0
+    shared = member @ member.T
+    sizes = member.sum(axis=1)
+    union = sizes[:, None] + sizes[None, :] - shared
+    matrix = np.where(union > 0, 1.0 - shared / np.maximum(union, 1.0), 1.0)
+    np.fill_diagonal(matrix, 0.0)
     return matrix
 
 
@@ -460,21 +646,23 @@ def gromos(matrix, cutoff):
     :return: cluster number (0-based, by size) per model
     '''
     import numpy as np
-    n = len(matrix)
-    left = set(range(n))
-    labels = [-1] * n
+    within = np.asarray(matrix) <= cutoff
+    n = len(within)
+    labels = np.full(n, -1)
+    left = np.ones(n, dtype=bool)
+    # neighbors among the models still without a cluster
+    counts = within.sum(axis=1)
     cluster = 0
-    while left:
-        members = sorted(left)
-        counts = [sum(matrix[i, j] <= cutoff for j in members)
-                  for i in members]
-        center = members[int(np.argmax(counts))]
-        for j in members:
-            if matrix[center, j] <= cutoff:
-                labels[j] = cluster
-                left.discard(j)
+    while left.any():
+        # (the first of those with the most neighbors)
+        center = int(np.argmax(np.where(left, counts, -1)))
+        members = left & within[center]
+        members[center] = True
+        labels[members] = cluster
+        left &= ~members
+        counts -= within[:, members].sum(axis=1)
         cluster += 1
-    return labels
+    return labels.tolist()
 
 
 def hierarchical(matrix, cutoff, method='average'):
@@ -774,16 +962,25 @@ def model_scores(models, part, state, scores, table, _self=cmd):
 
     :return: ([pLDDT or None], [{score: float}], [rows without a model])
     '''
+    # (all models in one pass: see read_sides)
+    found = {m: [] for m in models}
+
+    def add(model, b):
+        values = found.get(model)
+        if values is not None:
+            values.append(b)
+
+    _self.iterate_state(state, '(%s) and name CA' % part, 'add(model, b)',
+                        space={'add': add})
     plddt = []
     for m in models:
-        values = []
-        _self.iterate_state(state, '%%%s and (%s) and name CA' % (m, part),
-                            'values.append(b)', space={'values': values})
+        values = found[m]
         mean = sum(values) / len(values) if values else None
         plddt.append(mean if mean is not None and 0 < mean <= 100 else None)
     order = sorted(_self.get_chains(models[0]) or [])
     antibody_ids = antibody_chains(models[0], _self)
-    confidences = [find_scores(m, scores, order, antibody_ids)[0]
+    listing = folder_listing(scores)
+    confidences = [find_scores(m, scores, order, antibody_ids, listing)[0]
                    for m in models]
     unmatched = []
     if table:
@@ -818,8 +1015,10 @@ def compute(objects='', fit='', rmsd='', atoms='ca', cutoff=3.0,
     state = int(state)
 
     cutoff = float(cutoff)
-    epitopes = [contact_residues(m, fit, rmsd, state, _self=_self)
-                for m in models]
+    # both parts of every model, each read in one pass
+    fits = read_sides(models, fit, state, ATOM_NAMES[atoms], _self)
+    parts = read_sides(models, rmsd, state, ATOM_NAMES[atoms], _self)
+    epitopes = [close_residues(fits[m], parts[m]) for m in models]
     if measure == 'epitope':
         # where each model binds, not how the antibody is turned
         empty = [m for m, e in zip(models, epitopes) if not e]
@@ -833,8 +1032,7 @@ def compute(objects='', fit='', rmsd='', atoms='ca', cutoff=3.0,
         if measure == 'interface':
             # the contacting residues of both sides, in any model: fitted
             # on and measured, as CAPRI's interface RMSD
-            paratopes = [contact_residues(m, rmsd, fit, state, _self=_self)
-                         for m in models]
+            paratopes = [close_residues(parts[m], fits[m]) for m in models]
             residues = set.union(*epitopes) | set.union(*paratopes)
             if not residues:
                 raise ValueError('"%s" and "%s" do not touch in any '
@@ -842,21 +1040,21 @@ def compute(objects='', fit='', rmsd='', atoms='ca', cutoff=3.0,
                                  % (fit, rmsd))
             where = _residues_selection(residues)
             fit_sel = rmsd_sel = '(%s) and %s' % (where, ATOMS[atoms])
+            fit_keys, fit_xyz = rmsd_keys, rmsd_xyz = matched_atoms(
+                [joined(fits[m], parts[m], residues) for m in models])
         else:
             fit_sel = '(%s) and %s' % (fit, ATOMS[atoms])
             rmsd_sel = '(%s) and %s' % (rmsd, ATOMS[atoms])
-        fit_sets = [_atoms(m, fit_sel, state, _self) for m in models]
-        rmsd_sets = [_atoms(m, rmsd_sel, state, _self) for m in models]
-        fit_keys = sorted(set.intersection(*(set(a) for a in fit_sets)))
-        rmsd_keys = sorted(set.intersection(*(set(a) for a in rmsd_sets)))
+            fit_keys, fit_xyz = matched_atoms(
+                [(fits[m].keys, fits[m].coords) for m in models])
+            rmsd_keys, rmsd_xyz = matched_atoms(
+                [(parts[m].keys, parts[m].coords) for m in models])
         if len(fit_keys) < 3:
             raise ValueError('fewer than 3 atoms in "%s" common to all '
                              'structures' % fit_sel)
         if not rmsd_keys:
             raise ValueError('no atoms in "%s" common to all structures' %
                              rmsd_sel)
-        fit_xyz = [np.array([a[k] for k in fit_keys]) for a in fit_sets]
-        rmsd_xyz = [np.array([a[k] for k in rmsd_keys]) for a in rmsd_sets]
         matrix = rmsd_matrix(fit_xyz, rmsd_xyz)
     labels = gromos(matrix, cutoff) if method == 'gromos' else \
         hierarchical(matrix, cutoff, method)
@@ -884,25 +1082,30 @@ def apply(result, superpose=True, group=True, color=True, prefix='cluster',
     largest cluster's representative, one group per cluster (the
     representative first), the measured part colored by cluster
     '''
-    import numpy as np
     # (no representative: every model was left without a cluster)
     reference = result.clusters[0]['representative'] or result.models[0]
-    fit_sel = '(%s) and %s' % (result.fit, 'name CA')
     if superpose:
-        target = _atoms(reference, fit_sel, state, _self)
+        # (all models read in one pass, and each moved by its name, not
+        # as a selection: see read_sides)
+        sides = read_sides(result.models, '(%s) and name CA' % result.fit,
+                           state, _self=_self)
+        target = sides[reference]
         for model in result.models:
             if model == reference:
                 continue
-            mobile = _atoms(model, fit_sel, state, _self)
-            keys = sorted(set(target) & set(mobile))
+            keys, (mobile, onto) = matched_atoms([
+                (sides[model].keys, sides[model].coords),
+                (target.keys, target.coords)])
             if len(keys) < 3:
                 continue
-            rotation, translation = kabsch(
-                np.array([mobile[k] for k in keys]),
-                np.array([target[k] for k in keys]))
-            xyz = _self.get_coords('%' + model, state)
-            _self.load_coords(xyz @ rotation.T + translation, '%' + model,
-                              state=state)
+            rotation, translation = kabsch(mobile, onto)
+            try:
+                xyz = _self.get_coordset(model, state)
+            except pymol.CmdException:
+                xyz = None      # (no such state)
+            if xyz is None:
+                continue
+            _self.load_coordset(xyz @ rotation.T + translation, model, state)
     if group:
         # groups of an earlier clustering: emptied, then removed (deleting
         # a group would delete the models in it)
@@ -912,6 +1115,7 @@ def apply(result, superpose=True, group=True, color=True, prefix='cluster',
             if pattern.match(name) and set(members) <= set(result.models):
                 _self.ungroup(name)
                 _self.delete(name)
+    colors = {}     # model: color index
     for c in result.clusters:
         if group:
             name = _self.get_legal_name(group_name(prefix, c))
@@ -924,8 +1128,13 @@ def apply(result, superpose=True, group=True, color=True, prefix='cluster',
             colour = UNCLUSTERED_COLOR if c.get('unclustered') else \
                 CLUSTER_COLORS[(c['cluster'] - 1) % len(CLUSTER_COLORS)]
             for m in c['members']:
-                _self.color(colour, '%%%s and (%s) and elem C' % (
-                    m, result.rmsd))
+                colors[m] = _self.get_color_index(colour)
+    if colors:
+        # (every model's carbons in one pass, not a "color" per model)
+        _self.alter('(%s) and elem C' % result.rmsd,
+                    'color = colors.get(model, color)',
+                    space={'colors': colors})
+        _self.recolor()
     if group:
         _self.order(' '.join(group_name(prefix, c)
                              for c in result.clusters), location='current')
